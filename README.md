@@ -98,7 +98,7 @@ export WEBHOOK_SECRET_TOKEN=<a random 32+ char string>
 ./scripts/set_commands.sh   # populates the / autocomplete menu
 ```
 
-`deploy.sh` runs a pre-flight against Telegram's `getMe` before overwriting any secret in SSM, and refuses to silently rotate the webhook secret unless `ALLOW_SECRET_ROTATION=1` is set. (That hardening exists because the author once shipped wrong env vars and brick the bot for an hour. The pre-flight is now load-bearing.)
+`deploy.sh` runs a pre-flight against Telegram's `getMe` before overwriting any secret in SSM, and refuses to silently rotate the webhook secret unless `ALLOW_SECRET_ROTATION=1` is set. (That hardening exists because the author once shipped wrong env vars and bricked the bot for an hour. The pre-flight is now load-bearing.)
 
 ## Design choices worth pointing out
 
