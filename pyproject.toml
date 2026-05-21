@@ -1,0 +1,29 @@
+[project]
+name = "finance-bot"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+description = "A Telegram bot for personal finance tracking. AWS Lambda + DynamoDB."
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "F",     # pyflakes (unused imports, undefined names, etc.)
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "I",     # isort (import ordering)
+    "UP",    # pyupgrade (modern Python syntax)
+    "B",     # flake8-bugbear (common bugs, mutable defaults, etc.)
+    "SIM",   # flake8-simplify (code simplification)
+    "RUF",   # ruff-specific rules
+]
+ignore = [
+    "E501",   # line length (handled by formatter)
+    "RUF001", # ambiguous Unicode — intentional Cyrillic in default category names
+    "RUF003", # ambiguous Unicode in comments — same reason
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = ["F811"]  # allow redefinitions in tests

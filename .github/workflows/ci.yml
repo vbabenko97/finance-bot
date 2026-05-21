@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bot-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: telegram_bot/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r telegram_bot/requirements-dev.txt
+
+      - name: Lint
+        run: |
+          pip install ruff
+          ruff check telegram_bot/
+
+      - name: Run bot tests
+        run: pytest telegram_bot/tests -q

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Pytest / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+telegram_bot/infra/lambda.zip
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local secrets / overrides
+.env
+.env.local
