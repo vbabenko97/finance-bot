@@ -1,3 +1,6 @@
+# Bot test/runtime dependencies. Mirror of the [project.optional-dependencies]
+# `bot-dev` group in pyproject.toml. boto3 is a bot runtime dependency; the
+# deployed Lambda provides it via the AWS runtime, so it is not in the deploy zip.
 pytest>=8.0
 moto[dynamodb]>=5.0
 boto3>=1.34

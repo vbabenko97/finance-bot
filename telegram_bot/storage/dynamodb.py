@@ -13,6 +13,7 @@ from telegram_bot.storage.models import (
     AccountBalance,
     ConversationState,
     RecurringTemplate,
+    Subscription,
     Transaction,
 )
 
@@ -71,6 +72,48 @@ def _item_to_dynamo(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _balance_apply_item(
+    user_id: int, account_id: str, signed_amount_minor: int, currency: str, now: str
+) -> dict[str, Any]:
+    """TransactItem that adds to a balance and refreshes its currency/account metadata."""
+    return {
+        "Update": {
+            "TableName": _TABLE_NAME,
+            "Key": {
+                "PK": _s(f"USER#{user_id}"),
+                "SK": _s(f"BAL#{account_id}"),
+            },
+            "UpdateExpression": "ADD balance_minor :amt SET currency = :cur, last_updated = :ts, account_id = :aid",
+            "ExpressionAttributeValues": {
+                ":amt": _n(signed_amount_minor),
+                ":cur": _s(currency),
+                ":ts": _s(now),
+                ":aid": _s(account_id),
+            },
+        },
+    }
+
+
+def _upd_dedup_put(user_id: int, update_id: int, now: str, now_epoch: int) -> dict[str, Any]:
+    """TransactItem (always placed last) that records UPD#<id> for write idempotency.
+
+    Kept as the final item so the index-based CancellationReasons parsing in each
+    writer continues to identify the dedup leg correctly.
+    """
+    return {
+        "Put": {
+            "TableName": _TABLE_NAME,
+            "Item": {
+                "PK": _s(f"USER#{user_id}"),
+                "SK": _s(f"UPD#{update_id}"),
+                "processed_at": _s(now),
+                "ttl": _n(now_epoch + 86400),
+            },
+            "ConditionExpression": "attribute_not_exists(PK)",
+        },
+    }
+
+
 def add_transaction(user_id: int, tx: Transaction, update_id: int) -> bool:
     client = _get_client()
     now = _now_iso()
@@ -86,36 +129,8 @@ def add_transaction(user_id: int, tx: Transaction, update_id: int) -> bool:
                         "Item": tx_item,
                     },
                 },
-                {
-                    "Update": {
-                        "TableName": _TABLE_NAME,
-                        "Key": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"BAL#{tx.source_account}"),
-                        },
-                        "UpdateExpression": (
-                            "ADD balance_minor :amt SET currency = :cur, last_updated = :ts, account_id = :aid"
-                        ),
-                        "ExpressionAttributeValues": {
-                            ":amt": _n(tx.signed_amount_minor),
-                            ":cur": _s(tx.currency),
-                            ":ts": _s(now),
-                            ":aid": _s(tx.source_account),
-                        },
-                    },
-                },
-                {
-                    "Put": {
-                        "TableName": _TABLE_NAME,
-                        "Item": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"UPD#{update_id}"),
-                            "processed_at": _s(now),
-                            "ttl": _n(now_epoch + 86400),
-                        },
-                        "ConditionExpression": "attribute_not_exists(PK)",
-                    },
-                },
+                _balance_apply_item(user_id, tx.source_account, tx.signed_amount_minor, tx.currency, now),
+                _upd_dedup_put(user_id, update_id, now, now_epoch),
             ],
         )
     except client.exceptions.TransactionCanceledException as exc:
@@ -169,54 +184,9 @@ def transfer(user_id: int, out_tx: Transaction, in_tx: Transaction, update_id: i
             TransactItems=[
                 {"Put": {"TableName": _TABLE_NAME, "Item": out_item}},
                 {"Put": {"TableName": _TABLE_NAME, "Item": in_item}},
-                {
-                    "Update": {
-                        "TableName": _TABLE_NAME,
-                        "Key": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"BAL#{out_tx.source_account}"),
-                        },
-                        "UpdateExpression": (
-                            "ADD balance_minor :amt SET currency = :cur, last_updated = :ts, account_id = :aid"
-                        ),
-                        "ExpressionAttributeValues": {
-                            ":amt": _n(out_tx.signed_amount_minor),
-                            ":cur": _s(out_tx.currency),
-                            ":ts": _s(now),
-                            ":aid": _s(out_tx.source_account),
-                        },
-                    },
-                },
-                {
-                    "Update": {
-                        "TableName": _TABLE_NAME,
-                        "Key": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"BAL#{in_tx.source_account}"),
-                        },
-                        "UpdateExpression": (
-                            "ADD balance_minor :amt SET currency = :cur, last_updated = :ts, account_id = :aid"
-                        ),
-                        "ExpressionAttributeValues": {
-                            ":amt": _n(in_tx.signed_amount_minor),
-                            ":cur": _s(in_tx.currency),
-                            ":ts": _s(now),
-                            ":aid": _s(in_tx.source_account),
-                        },
-                    },
-                },
-                {
-                    "Put": {
-                        "TableName": _TABLE_NAME,
-                        "Item": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"UPD#{update_id}"),
-                            "processed_at": _s(now),
-                            "ttl": _n(now_epoch + 86400),
-                        },
-                        "ConditionExpression": "attribute_not_exists(PK)",
-                    },
-                },
+                _balance_apply_item(user_id, out_tx.source_account, out_tx.signed_amount_minor, out_tx.currency, now),
+                _balance_apply_item(user_id, in_tx.source_account, in_tx.signed_amount_minor, in_tx.currency, now),
+                _upd_dedup_put(user_id, update_id, now, now_epoch),
             ],
         )
     except client.exceptions.TransactionCanceledException as exc:
@@ -309,18 +279,7 @@ def delete_paired_transaction(user_id: int, tx: Transaction, update_id: int) -> 
                         "ExpressionAttributeValues": {":amt": _n(-paired.signed_amount_minor)},
                     },
                 },
-                {
-                    "Put": {
-                        "TableName": _TABLE_NAME,
-                        "Item": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"UPD#{update_id}"),
-                            "processed_at": _s(now),
-                            "ttl": _n(now_epoch + 86400),
-                        },
-                        "ConditionExpression": "attribute_not_exists(PK)",
-                    },
-                },
+                _upd_dedup_put(user_id, update_id, now, now_epoch),
             ],
         )
     except client.exceptions.TransactionCanceledException as exc:
@@ -378,18 +337,7 @@ def delete_transaction(user_id: int, tx: Transaction, update_id: int) -> bool:
                         },
                     },
                 },
-                {
-                    "Put": {
-                        "TableName": _TABLE_NAME,
-                        "Item": {
-                            "PK": _s(f"USER#{user_id}"),
-                            "SK": _s(f"UPD#{update_id}"),
-                            "processed_at": _s(now),
-                            "ttl": _n(now_epoch + 86400),
-                        },
-                        "ConditionExpression": "attribute_not_exists(PK)",
-                    },
-                },
+                _upd_dedup_put(user_id, update_id, now, now_epoch),
             ],
         )
     except client.exceptions.TransactionCanceledException as exc:
@@ -520,20 +468,7 @@ def update_transaction(user_id: int, old_tx: Transaction, new_tx: Transaction, u
         )
 
     upd_index = len(transact_items)
-    transact_items.append(
-        {
-            "Put": {
-                "TableName": _TABLE_NAME,
-                "Item": {
-                    "PK": _s(f"USER#{user_id}"),
-                    "SK": _s(f"UPD#{update_id}"),
-                    "processed_at": _s(now),
-                    "ttl": _n(now_epoch + 86400),
-                },
-                "ConditionExpression": "attribute_not_exists(PK)",
-            },
-        },
-    )
+    transact_items.append(_upd_dedup_put(user_id, update_id, now, now_epoch))
 
     try:
         client.transact_write_items(TransactItems=transact_items)
@@ -633,6 +568,25 @@ def get_fx_rates() -> dict[str, float] | None:
     if not isinstance(rates_raw, dict):
         return None
     return {k: float(v) for k, v in rates_raw.items()}
+
+
+def get_fx_rates_raw() -> tuple[dict[str, float], str] | None:
+    """Read cached FX rates plus their fetch timestamp, read-only.
+
+    Unlike get_fx_rates(), this ignores TTL and also returns fetched_at, for
+    snapshot export. Returns None if no FX cache item exists. Performs no writes.
+    """
+    table = _get_table()
+    response = table.get_item(Key={"PK": "CONFIG", "SK": "FX_RATES"})
+    item = response.get("Item")
+    if item is None:
+        return None
+    rates_raw = item.get("rates")
+    if not isinstance(rates_raw, dict):
+        return None
+    rates = {k: float(v) for k, v in rates_raw.items()}
+    fetched_at = str(item.get("fetched_at", ""))
+    return rates, fetched_at
 
 
 def cache_fx_rates(rates: dict[str, float]) -> None:
@@ -767,6 +721,47 @@ def delete_recurring_template(user_id: int, recur_id: str) -> bool:
             Key={
                 "PK": _s(f"USER#{user_id}"),
                 "SK": _s(f"RECUR#{recur_id}"),
+            },
+            ConditionExpression="attribute_exists(PK)",
+        )
+    except client.exceptions.ConditionalCheckFailedException:
+        return False
+    return True
+
+
+def get_all_subscriptions(user_id: int) -> list[Subscription]:
+    table = _get_table()
+    items: list[dict[str, Any]] = []
+    kwargs: dict[str, Any] = {
+        "KeyConditionExpression": "PK = :pk AND begins_with(SK, :prefix)",
+        "ExpressionAttributeValues": {
+            ":pk": f"USER#{user_id}",
+            ":prefix": "SUB#",
+        },
+    }
+    while True:
+        response = table.query(**kwargs)
+        items.extend(response.get("Items", []))
+        last_key = response.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+    return [Subscription.from_item(item) for item in items]
+
+
+def put_subscription(user_id: int, sub: Subscription) -> None:
+    table = _get_table()
+    table.put_item(Item=sub.to_item(user_id))
+
+
+def delete_subscription(user_id: int, sub_id: str) -> bool:
+    client = _get_client()
+    try:
+        client.delete_item(
+            TableName=_TABLE_NAME,
+            Key={
+                "PK": _s(f"USER#{user_id}"),
+                "SK": _s(f"SUB#{sub_id}"),
             },
             ConditionExpression="attribute_exists(PK)",
         )

@@ -56,22 +56,6 @@ def format_balance_table(
     return "\n".join(lines)
 
 
-def format_transaction_list(transactions: list[Transaction]) -> str:
-    if not transactions:
-        return "No transactions yet."
-
-    lines: list[str] = ["Recent transactions:"]
-    for tx in transactions:
-        ts = datetime.fromisoformat(tx.timestamp)
-        date_str = ts.strftime("%d.%m.%Y %H:%M")
-        prefix = "+" if tx.tx_type == "income" else "-"
-        amount_str = tx.display_amount()
-        lines.append(
-            f"\n{date_str}\n{prefix}{amount_str} \u2014 {tx.description}\n{tx.category_display} | {tx.source_account}"
-        )
-    return "\n".join(lines)
-
-
 def format_search_results(
     transactions: list[Transaction],
     total_matches: int,

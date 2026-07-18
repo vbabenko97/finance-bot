@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import calendar
-import hashlib
 import logging
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
@@ -9,6 +8,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from telegram_bot.bot import telegram_api
+from telegram_bot.bot.ids import stable_update_id
 from telegram_bot.config.categories import CATEGORIES
 from telegram_bot.storage import dynamodb
 from telegram_bot.storage.models import RecurringTemplate, Transaction, from_minor
@@ -38,7 +38,7 @@ def book_due_recurring(bot_token: str, user_id: int, chat_id: int, today: date) 
         if tpl.next_run_date > today_str:
             continue
 
-        update_id = _recurring_update_id(tpl.recur_id, tpl.next_run_date)
+        update_id = stable_update_id(f"recur:{tpl.recur_id}:{tpl.next_run_date}")
         tx = _build_tx_from_template(tpl, today)
         try:
             added = dynamodb.add_transaction(user_id, tx, update_id)
@@ -87,11 +87,6 @@ def _notify_recurring_booked(bot_token: str, chat_id: int, tx: Transaction, tpl:
     tx_sk = f"TX#{tx.timestamp}#{tx.tx_id}"
     keyboard = telegram_api.build_keyboard([("Undo", f"undo:{tx_sk}")])
     telegram_api.send_message_with_keyboard(bot_token, chat_id, msg, keyboard)
-
-
-def _recurring_update_id(recur_id: str, run_date: str) -> int:
-    digest = hashlib.sha1(f"recur:{recur_id}:{run_date}".encode()).hexdigest()
-    return int(digest[:12], 16)
 
 
 def advance_one_period(current: date, schedule: str, schedule_day: int) -> date:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from datetime import UTC, datetime
@@ -9,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from telegram_bot.bot import formatters, telegram_api
+from telegram_bot.bot.ids import stable_update_id
 from telegram_bot.bot.quick_add import extract_tags, normalize_tag
 from telegram_bot.config.accounts import ACCOUNTS
 from telegram_bot.config.categories import CATEGORIES, get_categories_for_mode
@@ -24,6 +24,7 @@ _CURRENCY_OPTIONS: list[tuple[str, str]] = [
     ("USD", "add:currency:USD"),
     ("UAH", "add:currency:UAH"),
     ("USDT", "add:currency:USDT"),
+    ("USDC", "add:currency:USDC"),
     ("BTC", "add:currency:BTC"),
 ]
 
@@ -377,6 +378,26 @@ def handle_edit_message(token: str, chat_id: int, user_id: int, text: str, messa
         )
 
 
+def _commit_edit_preview(
+    token: str,
+    chat_id: int,
+    user_id: int,
+    callback_query_id: str,
+    message_id: int,
+    state: ConversationState,
+    old_tx: Transaction,
+    field: str,
+    ack: str = "",
+) -> None:
+    """Persist the in-progress edit as EDIT_CONFIRM and re-render the preview."""
+    dynamodb.set_conv_state(user_id, _make_state("EDIT_CONFIRM", state.data))
+    new_tx = _apply_edit(old_tx, state.data)
+    telegram_api.answer_callback(token, callback_query_id, ack)
+    telegram_api.edit_message(
+        token, chat_id, message_id, _build_edit_preview(old_tx, new_tx, field), _confirm_keyboard()
+    )
+
+
 def handle_edit_callback(
     token: str,
     chat_id: int,
@@ -423,25 +444,13 @@ def handle_edit_callback(
             return
         state.data["new_category"] = cat_id
         state.data["new_category_display"] = CATEGORIES[cat_id]["display_name"]
-        new_state = _make_state("EDIT_CONFIRM", state.data)
-        dynamodb.set_conv_state(user_id, new_state)
-
-        new_tx = _apply_edit(old_tx, state.data)
-        telegram_api.answer_callback(token, callback_query_id)
-        telegram_api.edit_message(
-            token, chat_id, message_id, _build_edit_preview(old_tx, new_tx, "category"), _confirm_keyboard()
-        )
+        _commit_edit_preview(token, chat_id, user_id, callback_query_id, message_id, state, old_tx, "category")
         return
 
     if state.step == "EDIT_TAGS" and data_str == "edit:tags:clear":
         state.data["new_tags"] = []
-        new_state = _make_state("EDIT_CONFIRM", state.data)
-        dynamodb.set_conv_state(user_id, new_state)
-
-        new_tx = _apply_edit(old_tx, state.data)
-        telegram_api.answer_callback(token, callback_query_id, "Tags cleared")
-        telegram_api.edit_message(
-            token, chat_id, message_id, _build_edit_preview(old_tx, new_tx, "tags"), _confirm_keyboard()
+        _commit_edit_preview(
+            token, chat_id, user_id, callback_query_id, message_id, state, old_tx, "tags", "Tags cleared"
         )
         return
 
@@ -451,19 +460,12 @@ def handle_edit_callback(
             telegram_api.answer_callback(token, callback_query_id, "Unknown account")
             return
         state.data["new_account"] = account_id
-        new_state = _make_state("EDIT_CONFIRM", state.data)
-        dynamodb.set_conv_state(user_id, new_state)
-
-        new_tx = _apply_edit(old_tx, state.data)
-        telegram_api.answer_callback(token, callback_query_id)
-        telegram_api.edit_message(
-            token, chat_id, message_id, _build_edit_preview(old_tx, new_tx, "account"), _confirm_keyboard()
-        )
+        _commit_edit_preview(token, chat_id, user_id, callback_query_id, message_id, state, old_tx, "account")
         return
 
     if state.step == "EDIT_CONFIRM" and data_str == "edit:confirm":
         new_tx = _apply_edit(old_tx, state.data)
-        update_id = _edit_update_id(callback_query_id)
+        update_id = stable_update_id(callback_query_id)
         try:
             updated = dynamodb.update_transaction(user_id, old_tx, new_tx, update_id)
         except ValueError as exc:
@@ -653,8 +655,3 @@ def _build_updated_message(new_tx: Transaction) -> str:
     if new_tx.tags:
         lines.append("Tags: " + " ".join(f"#{t}" for t in new_tx.tags))
     return "\n".join(lines)
-
-
-def _edit_update_id(callback_query_id: str) -> int:
-    digest = hashlib.sha1(callback_query_id.encode("utf-8")).hexdigest()
-    return int(digest[:12], 16)

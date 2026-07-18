@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 MINOR_UNIT_FACTOR: dict[str, int] = {
@@ -9,6 +9,7 @@ MINOR_UNIT_FACTOR: dict[str, int] = {
     "USD": 100,
     "EUR": 100,
     "USDT": 100,
+    "USDC": 100,
     "BTC": 100_000_000,
 }
 
@@ -17,6 +18,7 @@ _DECIMAL_PLACES: dict[str, int] = {
     "USD": 2,
     "EUR": 2,
     "USDT": 2,
+    "USDC": 2,
     "BTC": 8,
 }
 
@@ -201,6 +203,72 @@ class RecurringTemplate:
             next_run_date=str(item["next_run_date"]),
             active=bool(item.get("active", True)),
             tags=tags,
+        )
+
+
+_PERIODS_PER_MONTH: dict[str, Decimal] = {
+    "monthly": Decimal(1),
+    "weekly": Decimal(52) / Decimal(12),
+    "yearly": Decimal(1) / Decimal(12),
+}
+
+
+def monthly_minor(amount_minor: int, period: str) -> int:
+    """Normalise a subscription charge to a per-month figure in minor units."""
+    try:
+        factor = _PERIODS_PER_MONTH[period]
+    except KeyError:
+        raise ValueError(f"Unknown subscription period: {period!r}") from None
+    return int((Decimal(amount_minor) * factor).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+@dataclass
+class Subscription:
+    """A recurring commitment, stored as reference data only.
+
+    A Subscription is a record of a recurring commitment so it can be reviewed
+    and totalled. Unlike RecurringTemplate, it is deliberately NOT wired into
+    scheduler.py and never auto-posts a transaction: the user records the actual
+    charges themselves, and auto-posting would double-book them.
+    """
+
+    sub_id: str
+    name: str
+    kind: str  # free-text grouping, e.g. "цифрові" | "здоров'я" | "житло"
+    amount_minor: int  # 0 when the amount isn't known yet
+    currency: str
+    period: str  # "monthly" | "weekly" | "yearly"
+    source_account: str
+    active: bool = True
+    note: str = ""
+
+    def to_item(self, user_id: int) -> dict[str, str | int | bool]:
+        return {
+            "PK": f"USER#{user_id}",
+            "SK": f"SUB#{self.sub_id}",
+            "sub_id": self.sub_id,
+            "name": self.name,
+            "kind": self.kind,
+            "amount_minor": self.amount_minor,
+            "currency": self.currency,
+            "period": self.period,
+            "source_account": self.source_account,
+            "active": self.active,
+            "note": self.note,
+        }
+
+    @classmethod
+    def from_item(cls, item: dict[str, Any]) -> Subscription:
+        return cls(
+            sub_id=str(item["sub_id"]),
+            name=str(item["name"]),
+            kind=str(item["kind"]),
+            amount_minor=int(item["amount_minor"]),
+            currency=str(item["currency"]),
+            period=str(item["period"]),
+            source_account=str(item["source_account"]),
+            active=bool(item.get("active", True)),
+            note=str(item.get("note", "")),
         )
 
 

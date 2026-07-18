@@ -5,7 +5,13 @@ import time
 import pytest
 
 from telegram_bot.storage import dynamodb
-from telegram_bot.storage.models import ConversationState, RecurringTemplate, Transaction
+from telegram_bot.storage.models import (
+    ConversationState,
+    RecurringTemplate,
+    Subscription,
+    Transaction,
+    monthly_minor,
+)
 
 USER_ID = 99
 
@@ -468,6 +474,93 @@ def test_delete_recurring_template(dynamodb_table) -> None:
     assert dynamodb.delete_recurring_template(USER_ID, "rcr1") is True
     assert dynamodb.get_recurring_template(USER_ID, "rcr1") is None
     assert dynamodb.delete_recurring_template(USER_ID, "rcr1") is False
+
+
+# ---------------------------------------------------------------------------
+# Subscription model + storage
+# ---------------------------------------------------------------------------
+
+
+def _make_subscription(sub_id: str = "sub1", **changes) -> Subscription:
+    sub = Subscription(
+        sub_id=sub_id,
+        name="ChatGPT Plus",
+        kind="digital",
+        amount_minor=2_400,
+        currency="USD",
+        period="monthly",
+        source_account="bank_usd_1",
+        active=True,
+        note="",
+    )
+    for k, v in changes.items():
+        setattr(sub, k, v)
+    return sub
+
+
+def test_subscription_item_round_trip() -> None:
+    sub = _make_subscription(active=False, note="since August")
+    item = sub.to_item(USER_ID)
+
+    assert item["PK"] == f"USER#{USER_ID}"
+    assert item["SK"] == "SUB#sub1"
+
+    assert Subscription.from_item(item) == sub
+
+
+def test_subscription_round_trip_through_dynamodb(dynamodb_table) -> None:
+    sub = _make_subscription(note="amount TBD", amount_minor=0)
+    dynamodb.put_subscription(USER_ID, sub)
+
+    fetched = dynamodb.get_all_subscriptions(USER_ID)
+    assert len(fetched) == 1
+    assert fetched[0] == sub
+
+
+def test_put_subscription_upserts_on_same_id(dynamodb_table) -> None:
+    dynamodb.put_subscription(USER_ID, _make_subscription())
+    dynamodb.put_subscription(USER_ID, _make_subscription(amount_minor=3_000, active=False))
+
+    subs = dynamodb.get_all_subscriptions(USER_ID)
+    assert len(subs) == 1
+    assert subs[0].amount_minor == 3_000
+    assert subs[0].active is False
+
+
+def test_get_all_subscriptions(dynamodb_table) -> None:
+    assert dynamodb.get_all_subscriptions(USER_ID) == []
+
+    dynamodb.put_subscription(USER_ID, _make_subscription(sub_id="s1"))
+    dynamodb.put_subscription(USER_ID, _make_subscription(sub_id="s2", active=False))
+
+    subs = dynamodb.get_all_subscriptions(USER_ID)
+    assert {s.sub_id for s in subs} == {"s1", "s2"}
+
+
+def test_delete_subscription(dynamodb_table) -> None:
+    dynamodb.put_subscription(USER_ID, _make_subscription())
+
+    assert dynamodb.delete_subscription(USER_ID, "sub1") is True
+    assert dynamodb.get_all_subscriptions(USER_ID) == []
+    assert dynamodb.delete_subscription(USER_ID, "sub1") is False
+
+
+def test_monthly_minor_monthly_is_identity() -> None:
+    assert monthly_minor(2_400, "monthly") == 2_400
+    assert monthly_minor(0, "monthly") == 0
+
+
+def test_monthly_minor_weekly() -> None:
+    assert monthly_minor(140_000, "weekly") == 606_667
+
+
+def test_monthly_minor_yearly() -> None:
+    assert monthly_minor(3_439, "yearly") == 287
+
+
+def test_monthly_minor_rejects_unknown_period() -> None:
+    with pytest.raises(ValueError):
+        monthly_minor(1_000, "daily")
 
 
 def test_mark_alert_sent_idempotent(dynamodb_table) -> None:

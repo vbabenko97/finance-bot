@@ -1,21 +1,48 @@
+"""Telegram command handlers.
+
+Self-contained command groups live in submodules (help, rates, search, export,
+entries) and are re-exported below so the public surface stays
+``telegram_bot.bot.commands.<name>`` for handler.py and the tests.
+
+The handlers kept in this module are the ones coupled to FX/time helpers that
+tests patch on this namespace (``commands._fetch_fx_rates``,
+``commands._load_fx_rates``, ``commands.datetime``): balance, portfolio, budget,
+summary, transfer, recurring — plus the callback dispatcher.
+"""
+
 from __future__ import annotations
 
 import calendar
-import csv
-import hashlib
-import io
 import json
 import logging
 import re
 import urllib.request
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
 from telegram_bot.bot import conversation, formatters, scheduler, telegram_api
-from telegram_bot.bot.quick_add import QuickAddParseResult, extract_tags, normalize_tag, parse_quick_add_detailed
+from telegram_bot.bot.commands.entries import handle_cancel as handle_cancel
+from telegram_bot.bot.commands.entries import handle_delete as handle_delete
+from telegram_bot.bot.commands.entries import handle_edit as handle_edit
+from telegram_bot.bot.commands.entries import handle_history as handle_history
+from telegram_bot.bot.commands.entries import handle_income as handle_income
+from telegram_bot.bot.commands.entries import handle_quick_add as handle_quick_add
+from telegram_bot.bot.commands.entries import handle_set_balance as handle_set_balance
+from telegram_bot.bot.commands.export import _build_export_csv as _build_export_csv
+from telegram_bot.bot.commands.export import handle_export as handle_export
+from telegram_bot.bot.commands.help import handle_help as handle_help
+from telegram_bot.bot.commands.help import handle_start as handle_start
+from telegram_bot.bot.commands.rates import handle_rates as handle_rates
+from telegram_bot.bot.commands.search import _match_transaction as _match_transaction
+from telegram_bot.bot.commands.search import _parse_search_args as _parse_search_args
+from telegram_bot.bot.commands.search import handle_search as handle_search
+from telegram_bot.bot.ids import stable_update_id
+from telegram_bot.bot.quick_add import extract_tags
 from telegram_bot.config.accounts import ACCOUNTS, DEFAULT_ACCOUNTS
 from telegram_bot.config.categories import CATEGORIES
 from telegram_bot.config.merchants import canonical_merchant
@@ -30,93 +57,6 @@ from telegram_bot.storage.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-_QUICK_ADD_ERROR_MESSAGES: dict[str, str] = {
-    "empty_input": "Enter an amount and description. Example: 150 Сільпо",
-    "invalid_amount": "Amount must come first. Example: 150 Сільпо or 25 USD Netflix",
-    "missing_description": "Add a description after the amount. Example: 150 Сільпо",
-    "unsupported_currency": "Currency must be one of: EUR, USD, UAH, USDT, BTC",
-    "unknown_account": "Unknown account after @account. Use /start to see valid examples.",
-    "invalid_format": "Could not parse. Try: 150 Сільпо, 25 USD Netflix, or 100 coffee @bank_usd_1",
-}
-
-
-def _quick_add_error_message(result: QuickAddParseResult, tx_type: str) -> str:
-    default = "Could not parse. Try: /income 5000 Зарплатня" if tx_type == "income" else "Try: 150 Сільпо"
-    base = _QUICK_ADD_ERROR_MESSAGES.get(result.error_code or "", default)
-    if tx_type == "income":
-        if result.error_code == "missing_description":
-            return "Add a description after the amount. Example: /income 5000 Зарплатня"
-        if result.error_code == "invalid_amount":
-            return "Amount must come first. Example: /income 5000 Зарплатня"
-        return base if base != default else default
-    return base
-
-
-# ---------------------------------------------------------------------------
-# /start
-# ---------------------------------------------------------------------------
-
-
-def _build_help_text() -> str:
-    return (
-        "Finance Bot help\n\n"
-        "Quick add:\n"
-        "  <code>15 Billa</code>\n"
-        "  <code>25 USD Netflix</code>\n"
-        "  <code>100 UAH coffee @bank_uah_1</code>\n"
-        "  <code>40 USD lunch #work</code>\n\n"
-        "Income:\n"
-        "  <code>/income 3000 Salary</code>\n\n"
-        "Commands:\n"
-        "  /balance - show balances\n"
-        "  /history - recent transactions\n"
-        "  /search - search transactions\n"
-        "  /portfolio - portfolio &amp; net worth\n"
-        "  /budget - monthly budget\n"
-        "  /summary - monthly summary &amp; pace\n"
-        "  /export [YYYY-MM] - download transactions as CSV\n"
-        "  /set_budget - set budget limit\n"
-        "  /delete_budget - remove budget\n"
-        "  /add - step-by-step add\n"
-        "  /edit &lt;n&gt; - edit nth transaction from history\n"
-        "  /delete - delete last transaction\n"
-        "  /recurring - manage recurring templates\n"
-        "  /transfer &lt;amount&gt; &lt;from&gt; &lt;to&gt; - move funds between accounts\n"
-        "  /set_balance &lt;account&gt; &lt;amount&gt;\n"
-        "  /rates - NBU exchange rates\n"
-        "  /cancel - cancel current action\n"
-        "  /help - this help\n\n"
-        "Budget:\n"
-        "  <code>/set_budget groceries 200</code>\n"
-        "  <code>/budget</code> or <code>/budget 2026-03</code>\n"
-        "  <code>/delete_budget groceries</code>\n\n"
-        "Search:\n"
-        "  <code>/search coffee</code>\n"
-        "  <code>/search -c groceries -d 2026-03</code>\n"
-        "  <code>/search -t italy2026 -t trip</code>\n\n"
-        "Tips:\n"
-        "  amount must come first, default currency: EUR\n"
-        "  supported currencies: EUR, USD, UAH, USDT, BTC\n"
-        "  use @account to override the default account\n"
-        "  use #tag in description to label transactions"
-    )
-
-
-def handle_start(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    greeting = (
-        "Finance Bot\n\n"
-        "Start with one of these:\n"
-        "  <code>15 Billa</code>\n"
-        "  <code>25 USD Netflix</code>\n"
-        "  <code>/income 3000 Salary</code>\n\n"
-        "Use /help for commands, account overrides, and examples."
-    )
-    telegram_api.send_message(token, chat_id, greeting)
-
-
-def handle_help(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    telegram_api.send_message(token, chat_id, _build_help_text())
 
 
 # ---------------------------------------------------------------------------
@@ -173,194 +113,6 @@ def handle_balance(token: str, chat_id: int, user_id: int, text: str, message: d
 
     table_text = formatters.format_balance_table(balances, fx_rates)
     telegram_api.send_message(token, chat_id, table_text)
-
-
-# ---------------------------------------------------------------------------
-# /history
-# ---------------------------------------------------------------------------
-
-
-def handle_history(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    transactions = dynamodb.get_transactions(user_id, limit=10)
-    if not transactions:
-        telegram_api.send_message(token, chat_id, "No transactions yet.")
-        return
-
-    lines: list[str] = ["Recent transactions:"]
-    buttons: list[list[dict[str, str]]] = []
-
-    for i, tx in enumerate(transactions, 1):
-        entry = formatters.format_history_entry(tx, i)
-        lines.append(f"\n{entry}")
-        tx_sk = f"TX#{tx.timestamp}#{tx.tx_id}"
-        buttons.append(
-            [
-                {"text": f"Edit #{i}", "callback_data": f"edit:{tx_sk}"},
-                {"text": f"Delete #{i}", "callback_data": f"del:{tx_sk}"},
-            ]
-        )
-
-    telegram_api.send_message_with_keyboard(token, chat_id, "\n".join(lines), buttons)
-
-
-# ---------------------------------------------------------------------------
-# /delete
-# ---------------------------------------------------------------------------
-
-
-def handle_delete(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    tx = dynamodb.get_last_transaction(user_id)
-    if tx is None:
-        telegram_api.send_message(token, chat_id, "No transactions to delete.")
-        return
-
-    tx_sk = f"TX#{tx.timestamp}#{tx.tx_id}"
-    entry = formatters.format_confirmation(tx)
-    keyboard = telegram_api.build_keyboard([("Confirm delete", f"confirm_del:{tx_sk}"), ("Cancel", "cancel_del")])
-    telegram_api.send_message_with_keyboard(token, chat_id, f"Delete this?\n\n{entry}", keyboard)
-
-
-# ---------------------------------------------------------------------------
-# /edit
-# ---------------------------------------------------------------------------
-
-
-def handle_edit(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    parts = text.strip().split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        telegram_api.send_message(token, chat_id, "Usage: /edit &lt;n&gt; (1-10, from /history)")
-        return
-
-    n = int(parts[1])
-    if n < 1 or n > 10:
-        telegram_api.send_message(token, chat_id, "Index must be 1-10. Use /history to see recent transactions.")
-        return
-
-    transactions = dynamodb.get_transactions(user_id, limit=10)
-    if n > len(transactions):
-        telegram_api.send_message(token, chat_id, f"Only {len(transactions)} recent transactions.")
-        return
-
-    tx = transactions[n - 1]
-    tx_sk = f"TX#{tx.timestamp}#{tx.tx_id}"
-    conversation.handle_edit_start(token, chat_id, user_id, tx_sk)
-
-
-# ---------------------------------------------------------------------------
-# /set_balance
-# ---------------------------------------------------------------------------
-
-
-def handle_set_balance(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    parts = text.strip().split()
-    # Expected: /set_balance <account_id> <amount>
-    if len(parts) != 3:
-        telegram_api.send_message(token, chat_id, "Usage: /set_balance &lt;account_id&gt; &lt;amount&gt;")
-        return
-
-    account_id = parts[1]
-    if account_id not in ACCOUNTS:
-        valid = ", ".join(sorted(ACCOUNTS))
-        telegram_api.send_message(token, chat_id, f"Unknown account. Valid accounts:\n{valid}")
-        return
-
-    try:
-        amount = Decimal(parts[2].replace(",", "."))
-    except InvalidOperation:
-        telegram_api.send_message(token, chat_id, "Invalid amount.")
-        return
-
-    currency = ACCOUNTS[account_id][1]
-    balance_minor = to_minor(amount, currency)
-    dynamodb.set_balance(user_id, account_id, balance_minor, currency)
-
-    display = format_amount(balance_minor, currency)
-    telegram_api.send_message(token, chat_id, f"Balance set: {account_id} = {display}")
-
-
-# ---------------------------------------------------------------------------
-# /income
-# ---------------------------------------------------------------------------
-
-
-def handle_income(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    # Strip "/income " prefix
-    after_cmd = text.strip()
-    if after_cmd.lower().startswith("/income"):
-        after_cmd = after_cmd[7:].strip()
-
-    if not after_cmd:
-        telegram_api.send_message(token, chat_id, "Usage: /income &lt;amount&gt; &lt;description&gt;")
-        return
-
-    result = parse_quick_add_detailed(after_cmd, tx_type="income")
-    tx = result.transaction
-    if tx is None:
-        telegram_api.send_message(token, chat_id, _quick_add_error_message(result, "income"))
-        return
-
-    update_id = message.get("message_id") or message.get("update_id", 0)
-    added = dynamodb.add_transaction(user_id, tx, int(update_id))
-    if not added:
-        telegram_api.send_message(token, chat_id, "Duplicate, already recorded.")
-        return
-
-    confirmation = formatters.format_confirmation(tx)
-    tx_sk = f"TX#{tx.timestamp}#{tx.tx_id}"
-    keyboard = telegram_api.build_keyboard([("Undo", f"undo:{tx_sk}")])
-    telegram_api.send_message_with_keyboard(token, chat_id, confirmation, keyboard)
-
-
-# ---------------------------------------------------------------------------
-# /rates
-# ---------------------------------------------------------------------------
-
-
-def handle_rates(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    try:
-        req = urllib.request.Request(
-            "https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json",
-            headers={"User-Agent": "finance-bot/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-    except Exception:
-        logger.exception("Failed to fetch NBU rates")
-        telegram_api.send_message(token, chat_id, "Failed to fetch NBU rates.")
-        return
-
-    nbu_by_code: dict[str, dict[str, Any]] = {}
-    for item in data:
-        nbu_by_code[item["cc"]] = item
-
-    date_str = nbu_by_code.get("USD", {}).get("exchangedate", "")
-
-    lines = [f"NBU rates ({date_str}):"]
-    for code in ("USD", "EUR", "GBP", "PLN", "CZK"):
-        r = nbu_by_code.get(code)
-        if r:
-            lines.append(f"  {code}/UAH: {r['rate']:.4f}")
-
-    usd_rate = nbu_by_code.get("USD", {}).get("rate")
-    eur_rate = nbu_by_code.get("EUR", {}).get("rate")
-    if usd_rate and eur_rate:
-        lines.append(f"\n  EUR/USD: {eur_rate / usd_rate:.4f}")
-
-    # BTC from Coinbase
-    try:
-        req = urllib.request.Request(
-            "https://api.coinbase.com/v2/prices/BTC-USD/spot",
-            headers={"User-Agent": "finance-bot/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            btc_data = json.loads(resp.read())
-        btc_price = float(btc_data.get("data", {}).get("amount", 0))
-        if btc_price > 0:
-            lines.append(f"  BTC/USD: ${btc_price:,.0f}")
-    except Exception:
-        pass
-
-    telegram_api.send_message(token, chat_id, "\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +177,11 @@ def handle_budget(token: str, chat_id: int, user_id: int, text: str, message: di
 
     if after_cmd:
         if not re.fullmatch(r"\d{4}-\d{2}", after_cmd):
+            telegram_api.send_message(token, chat_id, "Usage: /budget or /budget YYYY-MM")
+            return
+        try:
+            date.fromisoformat(f"{after_cmd}-01")
+        except ValueError:
             telegram_api.send_message(token, chat_id, "Usage: /budget or /budget YYYY-MM")
             return
         month = after_cmd
@@ -557,83 +314,6 @@ def handle_summary(token: str, chat_id: int, user_id: int, text: str, message: d
         days_in_month=days_in_month,
     )
     telegram_api.send_message(token, chat_id, formatters.format_summary(stats))
-
-
-# ---------------------------------------------------------------------------
-# /export
-# ---------------------------------------------------------------------------
-
-_EXPORT_COLUMNS = [
-    "date",
-    "timestamp",
-    "tx_type",
-    "amount",
-    "currency",
-    "description",
-    "category",
-    "category_id",
-    "account",
-    "tags",
-    "recur_id",
-]
-
-
-def _build_export_csv(transactions: list[Transaction]) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(_EXPORT_COLUMNS)
-    for tx in transactions:
-        factor = MINOR_UNIT_FACTOR[tx.currency]
-        places = len(str(factor)) - 1
-        value = Decimal(tx.signed_amount_minor) / Decimal(factor)
-        writer.writerow(
-            [
-                tx.date,
-                tx.timestamp,
-                tx.tx_type,
-                f"{value:.{places}f}",
-                tx.currency,
-                tx.description,
-                tx.category_display,
-                tx.category,
-                tx.source_account,
-                " ".join(f"#{t}" for t in sorted(tx.tags)),
-                tx.recur_id,
-            ]
-        )
-    return buf.getvalue().encode("utf-8-sig")
-
-
-def handle_export(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    after_cmd = text.strip()
-    if after_cmd.lower().startswith("/export"):
-        after_cmd = after_cmd[7:].strip()
-
-    if after_cmd:
-        if not re.fullmatch(r"\d{4}-\d{2}", after_cmd):
-            telegram_api.send_message(token, chat_id, "Usage: /export or /export YYYY-MM")
-            return
-        try:
-            date.fromisoformat(f"{after_cmd}-01")
-        except ValueError:
-            telegram_api.send_message(token, chat_id, "Usage: /export or /export YYYY-MM")
-            return
-        month: str | None = after_cmd
-        filename = f"transactions_{after_cmd}.csv"
-    else:
-        month = None
-        filename = "transactions_all.csv"
-
-    transactions = dynamodb.get_all_transactions(user_id)
-    if month is not None:
-        transactions = [tx for tx in transactions if tx.date.startswith(month)]
-    transactions.sort(key=lambda t: t.timestamp)
-
-    content = _build_export_csv(transactions)
-    caption = (
-        f"{len(transactions)} transaction(s)" if month is None else f"{len(transactions)} transaction(s) in {month}"
-    )
-    telegram_api.send_document(token, chat_id, filename, content, "text/csv", caption=caption)
 
 
 # ---------------------------------------------------------------------------
@@ -1092,150 +772,6 @@ def handle_transfer(token: str, chat_id: int, user_id: int, text: str, message: 
 
 
 # ---------------------------------------------------------------------------
-# /search
-# ---------------------------------------------------------------------------
-
-_SEARCH_FLAGS = {"-c": "category", "-a": "account", "-d": "date", "-t": "tag"}
-
-_SEARCH_USAGE = (
-    "Usage: /search &lt;text&gt; [-c category] [-a account] [-d YYYY-MM or YYYY-MM-DD] [-t tag]\n\n"
-    "Examples:\n"
-    "  <code>/search coffee</code>\n"
-    "  <code>/search -c groceries</code>\n"
-    "  <code>/search -a bank_uah_1 -d 2026-03</code>\n"
-    "  <code>/search -t italy2026 -t trip</code>\n"
-    "  <code>/search netflix -c subscriptions</code>"
-)
-
-_SEARCH_RESULT_LIMIT = 20
-
-
-def _parse_search_args(args: str) -> tuple[dict[str, str], str | None]:
-    tokens = args.split()
-    filters: dict[str, str] = {}
-    text_parts: list[str] = []
-    tags: list[str] = []
-    i = 0
-    while i < len(tokens):
-        tok = tokens[i]
-        if tok in _SEARCH_FLAGS:
-            if i + 1 >= len(tokens):
-                return {}, f"Missing value for {tok}"
-            field = _SEARCH_FLAGS[tok]
-            value = tokens[i + 1]
-            if field == "tag":
-                normalized = normalize_tag(value.lstrip("#"))
-                if not normalized:
-                    return {}, f"Invalid tag value: {value}"
-                tags.append(normalized)
-            else:
-                filters[field] = value
-            i += 2
-        elif tok.startswith("-"):
-            return {}, f"Unknown flag: {tok}\nSupported: -c (category), -a (account), -d (date), -t (tag)"
-        else:
-            text_parts.append(tok)
-            i += 1
-
-    if text_parts:
-        filters["text"] = " ".join(text_parts)
-    if tags:
-        filters["tag"] = ",".join(sorted(set(tags)))
-
-    if not filters:
-        return {}, _SEARCH_USAGE
-
-    if "category" in filters and filters["category"] not in CATEGORIES:
-        valid = ", ".join(sorted(CATEGORIES))
-        return {}, f"Unknown category: {filters['category']}\nValid: {valid}"
-
-    if "account" in filters and filters["account"] not in ACCOUNTS:
-        valid = ", ".join(sorted(ACCOUNTS))
-        return {}, f"Unknown account: {filters['account']}\nValid: {valid}"
-
-    if "date" in filters and not re.fullmatch(r"\d{4}-\d{2}(-\d{2})?", filters["date"]):
-        return {}, "Date must be YYYY-MM or YYYY-MM-DD"
-
-    return filters, None
-
-
-def _match_transaction(tx: Transaction, filters: dict[str, str]) -> bool:
-    if "category" in filters and tx.category != filters["category"]:
-        return False
-    if "account" in filters and tx.source_account != filters["account"]:
-        return False
-    if "date" in filters and not tx.date.startswith(filters["date"]):
-        return False
-    if "tag" in filters:
-        wanted = set(filters["tag"].split(","))
-        if not wanted & set(tx.tags):
-            return False
-    if "text" in filters:
-        query = filters["text"].lower()
-        searchable = f"{tx.description} {tx.category} {tx.category_display} {tx.source_account}".lower()
-        if query not in searchable:
-            return False
-    return True
-
-
-def handle_search(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    after_cmd = text.strip()
-    if after_cmd.lower().startswith("/search"):
-        after_cmd = after_cmd[7:].strip()
-
-    if not after_cmd:
-        telegram_api.send_message(token, chat_id, _SEARCH_USAGE)
-        return
-
-    filters, error = _parse_search_args(after_cmd)
-    if error:
-        telegram_api.send_message(token, chat_id, error)
-        return
-
-    transactions = dynamodb.get_all_transactions(user_id)
-    matches = [tx for tx in transactions if _match_transaction(tx, filters)]
-
-    total = len(matches)
-    shown = matches[:_SEARCH_RESULT_LIMIT]
-    result_text = formatters.format_search_results(shown, total, filters)
-    telegram_api.send_message(token, chat_id, result_text)
-
-
-# ---------------------------------------------------------------------------
-# /cancel
-# ---------------------------------------------------------------------------
-
-
-def handle_cancel(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    dynamodb.delete_conv_state(user_id)
-    telegram_api.send_message(token, chat_id, "Cancelled.")
-
-
-# ---------------------------------------------------------------------------
-# Quick-add (plain text, not a command)
-# ---------------------------------------------------------------------------
-
-
-def handle_quick_add(token: str, chat_id: int, user_id: int, text: str, message: dict[str, Any]) -> None:
-    result = parse_quick_add_detailed(text)
-    tx = result.transaction
-    if tx is None:
-        telegram_api.send_message(token, chat_id, _quick_add_error_message(result, "expense"))
-        return
-
-    update_id = message.get("message_id") or message.get("update_id", 0)
-    added = dynamodb.add_transaction(user_id, tx, int(update_id))
-    if not added:
-        telegram_api.send_message(token, chat_id, "Duplicate, already recorded.")
-        return
-
-    confirmation = formatters.format_confirmation(tx)
-    tx_sk = f"TX#{tx.timestamp}#{tx.tx_id}"
-    keyboard = telegram_api.build_keyboard([("Undo", f"undo:{tx_sk}")])
-    telegram_api.send_message_with_keyboard(token, chat_id, confirmation, keyboard)
-
-
-# ---------------------------------------------------------------------------
 # Callback query handler
 # ---------------------------------------------------------------------------
 
@@ -1252,8 +788,7 @@ def _find_transaction_by_sk(
 
 def _stable_callback_id(callback_query_id: str) -> int:
     # Stable across Lambda invocations — handles transport retries only.
-    digest = hashlib.sha1(callback_query_id.encode("utf-8")).hexdigest()
-    return int(digest[:12], 16)
+    return stable_update_id(callback_query_id)
 
 
 def _soft_delete_by_sk(
@@ -1274,6 +809,109 @@ def _soft_delete_by_sk(
     return dynamodb.delete_transaction(user_id, tx, callback_update_id)
 
 
+@dataclass
+class CallbackContext:
+    """Bundles the args shared by every callback-query handler.
+
+    A scoped instance of the "BotContext" idea: introduced here (where it is
+    low-risk and clearly useful) rather than across the ~25 command handlers,
+    whose uniform positional signature is exercised directly by many tests.
+    """
+
+    token: str
+    chat_id: int
+    user_id: int
+    callback_query_id: str
+    data: str
+    message: dict[str, Any]
+
+    @property
+    def message_id(self) -> int:
+        return self.message.get("message_id", 0)
+
+
+def _cb_undo(ctx: CallbackContext) -> None:
+    tx_sk = ctx.data[len("undo:") :]
+    deleted = _soft_delete_by_sk(ctx.user_id, tx_sk, _stable_callback_id(ctx.callback_query_id))
+    if deleted:
+        telegram_api.answer_callback(ctx.token, ctx.callback_query_id, "Undone")
+        telegram_api.edit_message(ctx.token, ctx.chat_id, int(ctx.message_id), "Undone.")
+    else:
+        telegram_api.answer_callback(ctx.token, ctx.callback_query_id, "Could not undo")
+
+
+def _cb_confirm_del(ctx: CallbackContext) -> None:
+    tx_sk = ctx.data[len("confirm_del:") :]
+    deleted = _soft_delete_by_sk(ctx.user_id, tx_sk, _stable_callback_id(ctx.callback_query_id))
+    if deleted:
+        telegram_api.answer_callback(ctx.token, ctx.callback_query_id, "Deleted")
+        telegram_api.edit_message(ctx.token, ctx.chat_id, int(ctx.message_id), "Deleted.")
+    else:
+        telegram_api.answer_callback(ctx.token, ctx.callback_query_id, "Could not delete")
+
+
+def _cb_cancel_del(ctx: CallbackContext) -> None:
+    telegram_api.answer_callback(ctx.token, ctx.callback_query_id, "Cancelled")
+    telegram_api.edit_message(ctx.token, ctx.chat_id, int(ctx.message_id), "Cancelled.")
+
+
+def _cb_del(ctx: CallbackContext) -> None:
+    tx_sk = ctx.data[len("del:") :]
+    # Show confirmation for the specific transaction
+    parsed = _find_transaction_by_sk(tx_sk)
+    if parsed is None:
+        telegram_api.answer_callback(ctx.token, ctx.callback_query_id, "Transaction not found")
+        return
+
+    _, timestamp, tx_id = parsed
+    target = dynamodb.get_transaction_by_key(ctx.user_id, timestamp, tx_id)
+
+    telegram_api.answer_callback(ctx.token, ctx.callback_query_id)
+    if target is None:
+        telegram_api.send_message(ctx.token, ctx.chat_id, "Transaction not found.")
+        return
+
+    entry = formatters.format_confirmation(target)
+    keyboard = telegram_api.build_keyboard(
+        [
+            ("Confirm delete", f"confirm_del:{tx_sk}"),
+            ("Cancel", "cancel_del"),
+        ]
+    )
+    telegram_api.send_message_with_keyboard(ctx.token, ctx.chat_id, f"Delete this?\n\n{entry}", keyboard)
+
+
+def _cb_add(ctx: CallbackContext) -> None:
+    conversation.handle_add_callback(ctx.token, ctx.chat_id, ctx.user_id, ctx.callback_query_id, ctx.data, ctx.message)
+
+
+def _cb_edit(ctx: CallbackContext) -> None:
+    conversation.handle_edit_callback(ctx.token, ctx.chat_id, ctx.user_id, ctx.callback_query_id, ctx.data, ctx.message)
+
+
+# Exact-match callbacks take priority; prefix matches are then tried in order.
+_CALLBACK_EXACT_HANDLERS: dict[str, Callable[[CallbackContext], None]] = {
+    "cancel_del": _cb_cancel_del,
+}
+_CALLBACK_PREFIX_HANDLERS: list[tuple[str, Callable[[CallbackContext], None]]] = [
+    ("undo:", _cb_undo),
+    ("confirm_del:", _cb_confirm_del),
+    ("del:", _cb_del),
+    ("add:", _cb_add),
+    ("edit:", _cb_edit),
+]
+
+
+def _resolve_callback_handler(data: str) -> Callable[[CallbackContext], None] | None:
+    handler = _CALLBACK_EXACT_HANDLERS.get(data)
+    if handler is not None:
+        return handler
+    for prefix, prefix_handler in _CALLBACK_PREFIX_HANDLERS:
+        if data.startswith(prefix):
+            return prefix_handler
+    return None
+
+
 def handle_callback(
     token: str,
     chat_id: int,
@@ -1282,60 +920,8 @@ def handle_callback(
     data: str,
     message: dict[str, Any],
 ) -> None:
-    message_id = message.get("message_id", 0)
-
-    if data.startswith("undo:"):
-        tx_sk = data[5:]
-        deleted = _soft_delete_by_sk(user_id, tx_sk, _stable_callback_id(callback_query_id))
-        if deleted:
-            telegram_api.answer_callback(token, callback_query_id, "Undone")
-            telegram_api.edit_message(token, chat_id, int(message_id), "Undone.")
-        else:
-            telegram_api.answer_callback(token, callback_query_id, "Could not undo")
-
-    elif data.startswith("confirm_del:"):
-        tx_sk = data[12:]
-        deleted = _soft_delete_by_sk(user_id, tx_sk, _stable_callback_id(callback_query_id))
-        if deleted:
-            telegram_api.answer_callback(token, callback_query_id, "Deleted")
-            telegram_api.edit_message(token, chat_id, int(message_id), "Deleted.")
-        else:
-            telegram_api.answer_callback(token, callback_query_id, "Could not delete")
-
-    elif data == "cancel_del":
-        telegram_api.answer_callback(token, callback_query_id, "Cancelled")
-        telegram_api.edit_message(token, chat_id, int(message_id), "Cancelled.")
-
-    elif data.startswith("del:"):
-        tx_sk = data[4:]
-        # Show confirmation for the specific transaction
-        parsed = _find_transaction_by_sk(tx_sk)
-        if parsed is None:
-            telegram_api.answer_callback(token, callback_query_id, "Transaction not found")
-            return
-
-        _, timestamp, tx_id = parsed
-        target = dynamodb.get_transaction_by_key(user_id, timestamp, tx_id)
-
+    handler = _resolve_callback_handler(data)
+    if handler is None:
         telegram_api.answer_callback(token, callback_query_id)
-        if target is None:
-            telegram_api.send_message(token, chat_id, "Transaction not found.")
-            return
-
-        entry = formatters.format_confirmation(target)
-        keyboard = telegram_api.build_keyboard(
-            [
-                ("Confirm delete", f"confirm_del:{tx_sk}"),
-                ("Cancel", "cancel_del"),
-            ]
-        )
-        telegram_api.send_message_with_keyboard(token, chat_id, f"Delete this?\n\n{entry}", keyboard)
-
-    elif data.startswith("add:"):
-        conversation.handle_add_callback(token, chat_id, user_id, callback_query_id, data, message)
-
-    elif data.startswith("edit:"):
-        conversation.handle_edit_callback(token, chat_id, user_id, callback_query_id, data, message)
-
-    else:
-        telegram_api.answer_callback(token, callback_query_id)
+        return
+    handler(CallbackContext(token, chat_id, user_id, callback_query_id, data, message))

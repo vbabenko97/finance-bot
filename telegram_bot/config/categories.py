@@ -44,6 +44,39 @@ CATEGORIES: dict[str, dict[str, str]] = {
     "asset_buy": {"display_name": "Купівля активів", "mode": "movement"},
     "loan_out": {"display_name": "Позика", "mode": "movement"},
     "loan_in": {"display_name": "Позика (отримана)", "mode": "movement"},
+    "opening_balance": {"display_name": "Початковий баланс", "mode": "movement"},
+}
+
+# 50/30/20 buckets. Only consumption categories get a bucket: income is the
+# denominator the rule is measured against, and movement is money changing places
+# rather than being spent, so it is excluded from the rule entirely.
+# Savings is derived (income - needs - wants), not a bucket — nothing maps to it.
+CATEGORY_BUCKET: dict[str, str] = {
+    # needs
+    "groceries": "needs",
+    "transport": "needs",
+    "healthcare": "needs",
+    "utilities": "needs",
+    "home": "needs",
+    "services": "needs",
+    "taxes_fees": "needs",
+    "blackout_resilience": "needs",
+    "education": "needs",
+    # wants
+    "dining": "wants",
+    "shopping": "wants",
+    "clothing": "wants",
+    "entertainment": "wants",
+    "subscriptions": "wants",
+    "personal": "wants",
+    "gifts": "wants",
+    "gift_out": "wants",
+    "charity": "wants",
+    "tobacco": "wants",
+    "travel": "wants",
+    "gaming": "wants",
+    "adult_services": "wants",
+    "unknown": "wants",
 }
 
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
@@ -172,7 +205,6 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "salary": [
         "salary",
         "зарплат",
-        "devrain",
         "робота",
     ],
     "cashback": [

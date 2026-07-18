@@ -129,6 +129,16 @@ class TestHandleBudget:
         mock_send.assert_called_once()
         assert "YYYY-MM" in mock_send.call_args[0][2]
 
+    @patch("telegram_bot.bot.telegram_api.send_message")
+    def test_invalid_month_value_rejected(self, mock_send):
+        # B.3: passes the YYYY-MM regex but is not a real calendar month.
+        from telegram_bot.bot.commands import handle_budget
+
+        handle_budget("token", 123, 456, "/budget 2026-13", {})
+
+        mock_send.assert_called_once()
+        assert "YYYY-MM" in mock_send.call_args[0][2]
+
 
 class TestHandleSetBudget:
     @patch("telegram_bot.bot.telegram_api.send_message")
