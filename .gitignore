@@ -28,3 +28,6 @@ telegram_bot/infra/lambda.zip
 # Local secrets / overrides
 .env
 .env.local
+
+# Local financial snapshot exports
+/exports/

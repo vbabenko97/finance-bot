@@ -16,7 +16,7 @@ A Telegram bot that turns personal-finance entry into a 10-second daily habit. S
 - **`/recurring`** templates with monthly / weekly / daily schedules booked automatically on a daily EventBridge cron.
 - **Proactive pace alerts**: same cron checks budgeted categories and pings if projected spend will overshoot the limit by more than 10%.
 - **`/export [YYYY-MM]`** ships a UTF-8 CSV via Telegram's `sendDocument` (stdlib multipart, no extra deps).
-- **`/portfolio`** + **`/balance`** with FX normalisation across UAH, USD, EUR, USDT, BTC.
+- **`/portfolio`** + **`/balance`** with FX normalisation across UAH, USD, EUR, USDT, USDC, BTC.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ Single-table DynamoDB. Every entity lives under `PK=USER#<id>` with a typed `SK`
 telegram_bot/
 ├── handler.py           — Lambda entry, routes API Gateway / SNS / EventBridge events
 ├── bot/
-│   ├── commands.py      — every / command handler
+│   ├── commands/        — command handlers and shared dispatcher
 │   ├── conversation.py  — multi-step /add and /edit state machines (TTL-bound in DynamoDB)
 │   ├── quick_add.py     — free-text parser + tag extraction
 │   ├── scheduler.py     — daily cron: recurring bookings + pace alerts
@@ -59,7 +59,8 @@ telegram_bot/
 │   ├── accounts.py      — account inventory (generic in this public copy)
 │   ├── categories.py    — flat category taxonomy
 │   └── merchants.py     — merchant alias canonicalisation for /summary grouping
-├── tests/               — 271 tests, pytest + moto, golden-path and double-execution coverage
+├── scripts/             — local snapshot export and deployment drift checks
+├── tests/               — pytest + moto, golden-path and double-execution coverage
 └── infra/
     ├── *.tf             — Lambda, API Gateway v2, DynamoDB, IAM, EventBridge, SNS, CloudWatch alarms
     └── scripts/         — deploy.sh / set_webhook.sh / set_commands.sh
@@ -70,7 +71,7 @@ No pip dependencies in the deployed zip beyond what Lambda's runtime already pro
 ## Tests
 
 ```bash
-make test     # pytest, ~3s, 271 tests
+make test     # pytest
 make lint     # ruff
 make check    # both
 ```
@@ -81,6 +82,41 @@ Tests use `moto` to fake DynamoDB, `unittest.mock.patch` to stub the Telegram cl
 - Cross-currency `/transfer` math validated against expected minor-unit conversions.
 - `/recurring` schedule advancement across short months, year boundaries, missed-cron catch-up (no backfill on resume).
 - Pace alert dedup within 24h, cross-currency budget normalisation, edge cases (zero day, zero limit, missing FX).
+
+## Local web tracker
+
+A Ukrainian-language browser UI provides queued transaction entry, paired
+transfers, account reconciliation, subscriptions, and 2026 monthly/YTD and
+50/30/20 views. It uses the same DynamoDB storage layer as the bot.
+
+```bash
+FINANCE_USER_ID=12345 python tools/tracker/server.py
+# Open http://127.0.0.1:8791/ (replace 12345 with your Telegram user id)
+```
+
+Configure AWS credentials, region, and `DYNAMODB_TABLE_NAME` for your deployment.
+The server binds only to localhost and has no authentication; do not expose it
+through a public proxy. Queued transactions are stored in browser local storage
+and written when you click Sync; subscription changes save immediately. Missing
+FX cache entries trigger a rate refresh. The tracker source is in `tools/tracker/`
+and is excluded from the Lambda package.
+
+## Local snapshot export
+
+With AWS credentials configured and `FINANCE_USER_ID` set to your Telegram user id:
+
+```bash
+make sync-finance                       # writes into ignored exports/
+make sync-finance OUT_DIR=/path/to/export
+python -m telegram_bot.scripts.check_deploy_drift --function-name finance-bot-webhook
+```
+
+The exporter reads DynamoDB without changing it and writes transactions, balances,
+and cached FX rates to three CSV files. The transaction filename is
+`2026_full_latest.csv` for compatibility; it contains all transactions, without a
+year filter. Exported files contain private financial data; keep custom output
+directories outside version control. The drift checker compares local bot code
+with the deployed Lambda without changing AWS resources.
 
 ## Deploy your own
 

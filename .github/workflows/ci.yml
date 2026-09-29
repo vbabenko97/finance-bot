@@ -26,7 +26,7 @@ jobs:
       - name: Lint
         run: |
           pip install ruff
-          ruff check telegram_bot/
+          ruff check telegram_bot/ tools/
 
       - name: Run bot tests
         run: pytest telegram_bot/tests -q

@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finance Tracker</title>
+<style>
+  :root {
+    --bg: #0d0f12; --panel: #14181d; --panel-2: #1a1f26; --line: #262d36;
+    --text: #e4e8ee; --dim: #7b8794; --dimmer: #4a5460;
+    --accent: #5eead4; --pos: #4ade80; --neg: #f87171; --warn: #fbbf24; --move: #818cf8;
+    --needs: #60a5fa; --wants: #c084fc; --save: #4ade80;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+  .warn { color: var(--warn); } .dim { color: var(--dim); }
+
+  header {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+    padding: 14px 24px; background: rgba(13,15,18,.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+  }
+  .brand { font-weight: 650; letter-spacing: .04em; text-transform: uppercase; font-size: 12px; color: var(--accent); }
+  .networth { display: flex; gap: 22px; margin-left: auto; align-items: baseline; }
+  .networth b { font-size: 19px; font-weight: 600; }
+  .nw-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--dimmer); display: block; }
+  .recon {
+    display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+    font-size: 12px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; color: var(--dim);
+  }
+  .recon.ok { border-color: #1e4a35; color: var(--pos); }
+  .recon.bad { border-color: #4a3a1e; color: var(--warn); }
+
+  nav { display: flex; gap: 2px; padding: 0 24px; border-bottom: 1px solid var(--line); }
+  nav button {
+    background: none; border: 0; border-bottom: 2px solid transparent; color: var(--dim);
+    padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  nav button:hover { color: var(--text); }
+  nav button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { padding: 24px; max-width: 1500px; }
+  section[hidden] { display: none; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--dimmer); margin: 0 0 12px; font-weight: 600; }
+  h2 .sub { text-transform: none; letter-spacing: 0; color: var(--dimmer); font-weight: 400; }
+
+  .grid { display: grid; gap: 16px; }
+  .cols { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+
+  .kpi { display: flex; gap: 28px; flex-wrap: wrap; }
+  .kpi > div { min-width: 110px; }
+  .kpi b { display: block; font-size: 21px; font-weight: 600; font-family: var(--mono); }
+
+  .acct { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .acct:last-child { border-bottom: 0; }
+  .acct .nm { font-size: 13px; }
+  .acct .id { font-size: 10px; color: var(--dimmer); font-family: var(--mono); }
+  .acct.off .bal { color: var(--warn); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--dimmer); font-weight: 600; padding: 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  tbody tr:hover { background: var(--panel-2); }
+  td.r, th.r { text-align: right; }
+  tr.total td { font-weight: 650; border-top: 1px solid var(--dim); border-bottom: 0; }
+  tr.off td { opacity: .45; }
+
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 10px; background: var(--panel-2); color: var(--dim); border: 1px solid var(--line); }
+  .pill.movement { color: var(--move); border-color: #2e3260; }
+  .pill.income { color: var(--pos); border-color: #1e4a35; }
+
+  form { display: grid; gap: 12px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--dimmer); margin-bottom: 5px; font-weight: 600; }
+  input, select {
+    width: 100%; padding: 9px 11px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 7px; font-size: 13px; font-family: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  input.num { font-family: var(--mono); }
+  input[type=checkbox] { width: auto; }
+
+  .seg { display: flex; gap: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px; width: fit-content; }
+  .seg button { background: none; border: 0; color: var(--dim); padding: 7px 15px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+  .seg button.on { background: var(--line); color: var(--text); }
+
+  .btn { padding: 10px 18px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 13px; font-weight: 500; }
+  .btn:hover:not(:disabled) { border-color: var(--dim); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: #06251f; border-color: var(--accent); font-weight: 650; }
+  .btn.ghost { background: none; padding: 4px 9px; font-size: 11px; color: var(--dim); }
+
+  .queue tr.error td { color: var(--neg); }
+  .queue tr.duplicate td { color: var(--warn); }
+
+  .bar { height: 5px; border-radius: 3px; background: var(--accent); }
+  .catrow { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; align-items: center; padding: 5px 0; }
+  .catrow .track { grid-column: 1 / -1; background: var(--panel-2); border-radius: 3px; }
+
+  .rule { display: grid; grid-template-columns: 92px 1fr 130px; gap: 10px; align-items: center; padding: 9px 0; }
+  .rule .track { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .rule .fill { height: 100%; border-radius: 4px; }
+  .rule .tgt { font-size: 11px; }
+
+  .note { font-size: 12px; color: var(--dim); background: var(--panel-2); border-left: 2px solid var(--line); padding: 9px 12px; border-radius: 0 6px 6px 0; }
+  .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 18px; border-radius: 8px; background: var(--panel); border: 1px solid var(--accent); font-size: 13px; z-index: 50; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">Finance Tracker</span>
+  <button class="recon" id="recon"></button>
+  <div class="networth" id="networth"></div>
+  <button class="btn ghost" id="refresh">↻ Оновити</button>
+</header>
+
+<nav>
+  <button data-tab="add" class="on">Додати</button>
+  <button data-tab="overview">Огляд</button>
+  <button data-tab="subs">Підписки</button>
+  <button data-tab="history">Історія</button>
+</nav>
+
+<main>
+
+<!-- ── ДОДАТИ ─────────────────────────────────────────────────────────────── -->
+<section id="tab-add">
+  <div class="grid" style="grid-template-columns: minmax(330px, 470px) 1fr; align-items: start;">
+
+    <div class="panel">
+      <h2>Нова операція</h2>
+      <div class="seg" id="kind" style="margin-bottom:16px">
+        <button data-kind="expense" class="on">Витрата</button>
+        <button data-kind="income">Дохід</button>
+        <button data-kind="movement">Рух</button>
+        <button data-kind="transfer">Переказ</button>
+      </div>
+
+      <form id="entry">
+        <div class="row">
+          <div><label>Дата</label><input type="date" id="f-date" required></div>
+          <div id="w-dir" hidden><label>Напрямок</label>
+            <select id="f-dir"><option value="out">− Списання</option><option value="in">+ Надходження</option></select>
+          </div>
+        </div>
+
+        <div id="w-single">
+          <div class="row">
+            <div><label>Рахунок</label><select id="f-account"></select></div>
+            <div><label>Сума <span class="dim" id="f-cur"></span></label><input class="num" id="f-amount" inputmode="decimal" placeholder="0.00"></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <div><label>Категорія</label><select id="f-category"></select></div>
+            <div><label>Підкатегорія</label>
+              <input id="f-subcategory" list="subcats" placeholder="Магазин, Таксі, ...">
+              <datalist id="subcats"></datalist>
+            </div>
+          </div>
+        </div>
+
+        <div id="w-transfer" hidden>
+          <div class="row">
+            <div><label>Звідки</label><select id="f-from"></select></div>
+            <div><label>Сума <span class="dim" id="f-from-cur"></span></label><input class="num" id="f-from-amount" inputmode="decimal" placeholder="0.00"></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <div><label>Куди</label><select id="f-to"></select></div>
+            <div><label>Отримано <span class="dim" id="f-to-cur"></span></label><input class="num" id="f-to-amount" inputmode="decimal" placeholder="0.00"></div>
+          </div>
+          <div id="fx-hint" class="note" style="margin-top:12px" hidden></div>
+        </div>
+
+        <div style="margin-top:12px"><label>Опис</label><input id="f-desc" placeholder="Billa, зарплата, ..."></div>
+        <button type="submit" class="btn" style="margin-top:4px">+ У чергу</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Черга на синхронізацію (<span id="q-count">0</span>)</h2>
+      <div id="q-empty" class="note">Порожньо. Додані операції з'являться тут і нікуди не підуть, доки ти не натиснеш «Синхронізувати».</div>
+      <table class="queue" id="q-table" hidden>
+        <thead><tr><th>Дата</th><th>Операція</th><th class="r">Сума</th><th></th></tr></thead>
+        <tbody id="q-body"></tbody>
+      </table>
+      <div style="display:flex; gap:10px; margin-top:16px; align-items:center">
+        <button class="btn primary" id="sync" disabled>↑ Синхронізувати</button>
+        <button class="btn ghost" id="q-clear" hidden>Очистити чергу</button>
+        <span class="dim" id="sync-status" style="font-size:12px"></span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── ОГЛЯД ──────────────────────────────────────────────────────────────── -->
+<section id="tab-overview" hidden>
+  <div class="panel" style="margin-bottom:16px">
+    <h2>Підсумки 2026</h2>
+    <div class="kpi" id="ytd"></div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); margin-bottom:16px">
+    <div class="panel">
+      <h2>50 / 30 / 20 <span class="sub">— частка доходу за 2026</span></h2>
+      <div id="rule"></div>
+    </div>
+    <div class="panel">
+      <h2>Помісячно <span class="sub">— EUR</span></h2>
+      <table><thead><tr><th>Місяць</th><th class="r">Дохід</th><th class="r">Витрати</th><th class="r">Чисте</th></tr></thead>
+      <tbody id="monthly"></tbody></table>
+    </div>
+  </div>
+
+  <div class="grid cols" id="groups" style="margin-bottom:16px"></div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr))">
+    <div class="panel">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+        <h2 style="margin:0">Витрати за категоріями</h2>
+        <div class="seg" id="cat-period">
+          <button data-p="month" class="on">Місяць</button>
+          <button data-p="year">2026</button>
+        </div>
+      </div>
+      <div id="cats"></div>
+    </div>
+    <div class="panel">
+      <h2>Звірка</h2>
+      <div id="recon-detail"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── ПІДПИСКИ ───────────────────────────────────────────────────────────── -->
+<section id="tab-subs" hidden>
+  <div class="grid" style="grid-template-columns: 1fr minmax(300px, 380px); align-items: start">
+    <div class="panel">
+      <h2>Регулярні платежі <span class="sub">— довідник, нічого не проводиться автоматично</span></h2>
+      <div class="note" style="margin-bottom:14px">
+        Це <b>довідник зобов'язань</b>, а не планувальник. Бот з нього нічого не списує — реальні списання ти вносиш сам, як і раніше. Інакше були б подвійні записи.
+      </div>
+      <div id="subs-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2 id="sub-form-title">Новий платіж</h2>
+      <form id="sub-form">
+        <input type="hidden" id="s-id">
+        <div><label>Назва</label><input id="s-name" required placeholder="ChatGPT Plus"></div>
+        <div class="row">
+          <div><label>Тип</label><input id="s-kind" list="subkinds" placeholder="цифрові">
+            <datalist id="subkinds"><option>цифрові</option><option>здоров'я</option><option>житло</option></datalist>
+          </div>
+          <div><label>Період</label><select id="s-period">
+            <option value="monthly">щомісяця</option><option value="weekly">щотижня</option><option value="yearly">щороку</option>
+          </select></div>
+        </div>
+        <div class="row">
+          <div><label>Рахунок</label><select id="s-account"></select></div>
+          <div><label>Сума <span class="dim" id="s-cur"></span></label><input class="num" id="s-amount" inputmode="decimal" placeholder="0.00"></div>
+        </div>
+        <div><label>Примітка</label><input id="s-note" placeholder="з серпня, сума невідома..."></div>
+        <div><label style="display:flex; gap:8px; align-items:center; text-transform:none; letter-spacing:0; font-size:13px; color:var(--text)">
+          <input type="checkbox" id="s-active" checked> активна зараз
+        </label></div>
+        <div style="display:flex; gap:10px">
+          <button type="submit" class="btn primary">Зберегти</button>
+          <button type="button" class="btn ghost" id="s-reset" hidden>Скасувати</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ── ІСТОРІЯ ────────────────────────────────────────────────────────────── -->
+<section id="tab-history" hidden>
+  <div class="panel" style="margin-bottom:16px">
+    <div class="row">
+      <div><label>Пошук</label><input id="h-q" placeholder="опис або підкатегорія..."></div>
+      <div><label>Рахунок</label><select id="h-account"><option value="">усі</option></select></div>
+      <div><label>Тип</label><select id="h-mode">
+        <option value="">усі</option><option value="consumption">витрати</option>
+        <option value="income">дохід</option><option value="movement">рух</option>
+      </select></div>
+      <div><label>Показати</label><select id="h-limit"><option>100</option><option>300</option><option>1000</option></select></div>
+    </div>
+  </div>
+  <div class="panel">
+    <table>
+      <thead><tr><th>Дата</th><th>Опис</th><th>Категорія</th><th>Підкатегорія</th><th>Рахунок</th><th class="r">Сума</th></tr></thead>
+      <tbody id="h-body"></tbody>
+    </table>
+    <div class="dim" id="h-count" style="margin-top:12px; font-size:12px"></div>
+  </div>
+</section>
+
+</main>
+
+<script>
+"use strict";
+
+const PENDING_KEY = "finance_tracker_pending_v1";
+const YEAR = "2026";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+let DATA = null;
+let PENDING = loadPending();
+let KIND = "expense";
+let CAT_PERIOD = "month";
+
+function loadPending() { try { return JSON.parse(localStorage.getItem(PENDING_KEY)) || []; } catch { return []; } }
+function savePending() { localStorage.setItem(PENDING_KEY, JSON.stringify(PENDING)); }
+
+// Telegram's own update_ids live far below 1e12. Staying above it means a tracker
+// sync can never collide with a real bot message in the shared UPD# dedup space.
+const newUpdateId = () => 1_000_000_000_000 + Math.floor(Math.random() * 1_000_000_000_000);
+
+const factor = (cur) => (DATA.minor_unit_factor || {})[cur] || 100;
+const places = (cur) => (cur === "BTC" ? 8 : 2);
+const curOf = (acct) => DATA.accounts[acct].currency;
+const fmt = (minor, cur) =>
+  (minor / factor(cur)).toLocaleString("uk-UA", { minimumFractionDigits: places(cur), maximumFractionDigits: places(cur) }) + " " + cur;
+const eur0 = (v) => "€" + v.toLocaleString("uk-UA", { maximumFractionDigits: 0 });
+
+// FX rates are "units per USD". No rate → the value is excluded from converted
+// totals rather than guessed at. That's why USDC shows up as "без курсу".
+function toUsd(minor, cur) {
+  const rates = DATA.fx && DATA.fx.rates;
+  if (!rates || !rates[cur]) return null;
+  return minor / factor(cur) / rates[cur];
+}
+function toEur(minor, cur) {
+  const usd = toUsd(minor, cur);
+  const rates = DATA.fx && DATA.fx.rates;
+  return usd === null || !rates || !rates.EUR ? null : usd * rates.EUR;
+}
+
+// ── header ─────────────────────────────────────────────────────────────────
+
+function renderHeader() {
+  let assets = 0, debts = 0;
+  const skipped = new Set();
+  for (const b of DATA.balances) {
+    const v = toEur(b.balance_minor, b.currency);
+    if (v === null) { if (b.balance_minor !== 0) skipped.add(b.currency); continue; }
+    if (v < 0) debts += v; else assets += v;
+  }
+  const net = assets + debts;
+  $("networth").innerHTML =
+    `<div><span class="nw-label">Чистий капітал</span><b>${eur0(net)}</b></div>` +
+    `<div><span class="nw-label">Активи</span><b class="pos" style="font-size:15px">${eur0(assets)}</b></div>` +
+    `<div><span class="nw-label">Борги</span><b class="neg" style="font-size:15px">${eur0(debts)}</b></div>` +
+    (skipped.size ? `<div><span class="nw-label">без курсу</span><b class="warn" style="font-size:13px">${[...skipped].join(", ")}</b></div>` : "");
+
+  const off = DATA.recon.filter((r) => r.residual_minor !== 0);
+  const el = $("recon");
+  el.className = "recon " + (off.length ? "bad" : "ok");
+  el.textContent = `${DATA.recon.length - off.length}/${DATA.recon.length} сходяться` + (off.length ? ` · ${off.length} з розбіжністю` : " ✓");
+}
+
+// ── overview ───────────────────────────────────────────────────────────────
+
+// Movement rows (transfers, FX, withdrawals, the 2025-12-31 opening balances) are
+// not spending and not income — they never enter these figures.
+function flows(pred) {
+  let income = 0, needs = 0, wants = 0;
+  for (const t of DATA.transactions) {
+    if (!pred(t)) continue;
+    const eur = toEur(Math.abs(t.signed_amount_minor), t.currency);
+    if (eur === null) continue;
+    if (t.mode === "income") income += eur;
+    else if (t.mode === "consumption") {
+      if (DATA.buckets[t.category] === "needs") needs += eur; else wants += eur;
+    }
+  }
+  return { income, needs, wants, spend: needs + wants, net: income - needs - wants };
+}
+
+function renderYtd() {
+  const f = flows((t) => t.date.startsWith(YEAR));
+  const rate = f.income ? (f.net / f.income) * 100 : 0;
+  $("ytd").innerHTML =
+    `<div><span class="nw-label">Доходи</span><b class="pos">${eur0(f.income)}</b></div>` +
+    `<div><span class="nw-label">Витрати</span><b class="neg">${eur0(f.spend)}</b></div>` +
+    `<div><span class="nw-label">Заощадження</span><b class="${f.net < 0 ? "neg" : "pos"}">${eur0(f.net)}</b></div>` +
+    `<div><span class="nw-label">Норма заощаджень</span><b class="${f.net < 0 ? "neg" : ""}">${rate.toFixed(0)}%</b></div>`;
+}
+
+function renderRule() {
+  const f = flows((t) => t.date.startsWith(YEAR));
+  if (!f.income) { $("rule").innerHTML = `<div class="note">Немає доходів за ${YEAR}.</div>`; return; }
+  const rows = [
+    ["Потреби", f.needs, 50, "var(--needs)"],
+    ["Бажання", f.wants, 30, "var(--wants)"],
+    ["Заощадження", f.net, 20, "var(--save)"],
+  ];
+  $("rule").innerHTML = rows.map(([name, val, target, color]) => {
+    const pct = (val / f.income) * 100;
+    return `<div class="rule">
+      <span>${name}</span>
+      <div class="track"><div class="fill" style="width:${Math.max(0, Math.min(100, pct)).toFixed(1)}%; background:${color}"></div></div>
+      <span class="r num tgt ${pct > target && name !== "Заощадження" ? "warn" : pct < target && name === "Заощадження" ? "warn" : "dim"}">
+        ${pct.toFixed(0)}% <span class="dim">/ ${target}%</span> · ${eur0(val)}
+      </span>
+    </div>`;
+  }).join("") +
+  `<div class="note" style="margin-top:12px">Знаменник — увесь дохід за ${YEAR}. Заощадження = дохід − потреби − бажання. Перекази, обміни та зняття готівки в розрахунок не входять.</div>`;
+}
+
+function renderMonthly() {
+  const months = [...new Set(DATA.transactions.filter((t) => t.date.startsWith(YEAR)).map((t) => t.date.slice(0, 7)))].sort();
+  let ti = 0, ts = 0;
+  const rows = months.map((m) => {
+    const f = flows((t) => t.date.startsWith(m));
+    ti += f.income; ts += f.spend;
+    return `<tr>
+      <td class="num dim">${m}</td>
+      <td class="r num pos">${eur0(f.income)}</td>
+      <td class="r num neg">${eur0(f.spend)}</td>
+      <td class="r num ${f.net < 0 ? "neg" : "pos"}">${eur0(f.net)}</td>
+    </tr>`;
+  }).join("");
+  $("monthly").innerHTML = rows + `<tr class="total">
+    <td>Разом</td><td class="r num pos">${eur0(ti)}</td>
+    <td class="r num neg">${eur0(ts)}</td>
+    <td class="r num ${ti - ts < 0 ? "neg" : "pos"}">${eur0(ti - ts)}</td></tr>`;
+}
+
+function renderCats() {
+  const prefix = CAT_PERIOD === "year" ? YEAR : new Date().toISOString().slice(0, 7);
+  const spend = {};
+  for (const t of DATA.transactions) {
+    if (t.mode !== "consumption" || !t.date.startsWith(prefix)) continue;
+    const eur = toEur(-t.signed_amount_minor, t.currency);
+    if (eur === null || eur <= 0) continue;
+    const key = t.category_display;
+    if (!spend[key]) spend[key] = { eur: 0, bucket: DATA.buckets[t.category] };
+    spend[key].eur += eur;
+  }
+  const rows = Object.entries(spend).sort((a, b) => b[1].eur - a[1].eur);
+  if (!rows.length) { $("cats").innerHTML = `<div class="note">Витрат за цей період немає.</div>`; return; }
+  const max = rows[0][1].eur;
+  $("cats").innerHTML = rows.map(([name, v]) => `
+    <div class="catrow">
+      <span>${esc(name)} <span class="pill" style="color:${v.bucket === "needs" ? "var(--needs)" : "var(--wants)"}">${v.bucket === "needs" ? "потреба" : "бажання"}</span></span>
+      <span class="num dim">${eur0(v.eur)}</span>
+      <div class="track"><div class="bar" style="width:${(v.eur / max * 100).toFixed(1)}%; background:${v.bucket === "needs" ? "var(--needs)" : "var(--wants)"}"></div></div>
+    </div>`).join("");
+}
+
+function renderGroups() {
+  const byGroup = {};
+  for (const [id, a] of Object.entries(DATA.accounts)) (byGroup[a.group || "Other"] ||= []).push(id);
+  const balOf = Object.fromEntries(DATA.balances.map((b) => [b.account_id, b]));
+  const offSet = new Set(DATA.recon.filter((r) => r.residual_minor !== 0).map((r) => r.account_id));
+
+  $("groups").innerHTML = Object.entries(byGroup).map(([group, ids]) => `
+    <div class="panel">
+      <h2>${esc(group)}</h2>
+      ${ids.map((id) => {
+        const minor = balOf[id] ? balOf[id].balance_minor : 0;
+        const cur = DATA.accounts[id].currency;
+        return `<div class="acct ${offSet.has(id) ? "off" : ""}">
+          <div><div class="nm">${esc(DATA.accounts[id].display_name)}</div><div class="id">${id}</div></div>
+          <div class="bal num ${minor < 0 ? "neg" : ""}">${fmt(minor, cur)}</div>
+        </div>`;
+      }).join("")}
+    </div>`).join("");
+}
+
+function renderRecon() {
+  const off = DATA.recon.filter((r) => r.residual_minor !== 0);
+  if (!off.length) { $("recon-detail").innerHTML = `<div class="note">Усі рахунки сходяться.</div>`; return; }
+  $("recon-detail").innerHTML =
+    `<div class="note" style="margin-bottom:12px">Різниця між <b>BAL#</b> і сумою всіх транзакцій. Ненульова = у журналі бракує руху грошей.</div>
+    <table><thead><tr><th>Рахунок</th><th class="r">Баланс</th><th class="r">Сума транзакцій</th><th class="r">Розбіжність</th></tr></thead>
+    <tbody>${off.map((r) => `<tr>
+      <td class="num">${r.account_id}</td>
+      <td class="r num dim">${fmt(r.balance_minor, r.currency)}</td>
+      <td class="r num dim">${fmt(r.sum_minor, r.currency)}</td>
+      <td class="r num warn">${fmt(r.residual_minor, r.currency)}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+// ── subscriptions ──────────────────────────────────────────────────────────
+
+function renderSubs() {
+  const subs = DATA.subscriptions || [];
+  if (!subs.length) { $("subs-list").innerHTML = `<div class="note">Порожньо.</div>`; return; }
+
+  let active = 0, all = 0;
+  for (const s of subs) {
+    const eur = toEur(s.monthly_minor, s.currency) || 0;
+    all += eur;
+    if (s.active) active += eur;
+  }
+
+  const byKind = {};
+  for (const s of subs) (byKind[s.kind || "інше"] ||= []).push(s);
+
+  $("subs-list").innerHTML =
+    `<div class="kpi" style="margin-bottom:18px">
+      <div><span class="nw-label">Активні зараз</span><b>${eur0(active)}<span class="dim" style="font-size:13px">/міс</span></b></div>
+      <div><span class="nw-label">Разом з неактивними</span><b class="dim" style="font-size:15px">${eur0(all)}<span style="font-size:13px">/міс</span></b></div>
+      <div><span class="nw-label">На рік</span><b class="dim" style="font-size:15px">${eur0(active * 12)}</b></div>
+    </div>` +
+    Object.entries(byKind).map(([kind, list]) => `
+      <h2 style="margin-top:16px">${esc(kind)}</h2>
+      <table><tbody>${list.map((s) => {
+        const eur = toEur(s.monthly_minor, s.currency);
+        return `<tr class="${s.active ? "" : "off"}">
+          <td>${esc(s.name)}${s.note ? `<div class="dim" style="font-size:11px">${esc(s.note)}</div>` : ""}</td>
+          <td class="num dim">${s.amount_minor ? fmt(s.amount_minor, s.currency) : "—"} <span class="pill">${({monthly:"щомісяця",weekly:"щотижня",yearly:"щороку"})[s.period]}</span></td>
+          <td class="num dim">${s.source_account}</td>
+          <td class="r num">${eur === null ? "—" : eur0(eur) + "/міс"}</td>
+          <td class="r" style="white-space:nowrap">
+            <button class="btn ghost" data-edit="${s.sub_id}">ред.</button>
+            <button class="btn ghost" data-del="${s.sub_id}">✕</button>
+          </td>
+        </tr>`;
+      }).join("")}</tbody></table>`).join("");
+
+  for (const b of $("subs-list").querySelectorAll("[data-edit]")) b.onclick = () => editSub(b.dataset.edit);
+  for (const b of $("subs-list").querySelectorAll("[data-del]")) b.onclick = () => delSub(b.dataset.del);
+}
+
+function editSub(id) {
+  const s = DATA.subscriptions.find((x) => x.sub_id === id);
+  if (!s) return;
+  $("sub-form-title").textContent = "Редагувати: " + s.name;
+  $("s-id").value = s.sub_id;
+  $("s-name").value = s.name;
+  $("s-kind").value = s.kind;
+  $("s-period").value = s.period;
+  $("s-account").value = s.source_account;
+  $("s-amount").value = s.amount_minor ? (s.amount_minor / factor(s.currency)).toFixed(places(s.currency)) : "";
+  $("s-note").value = s.note;
+  $("s-active").checked = s.active;
+  $("s-reset").hidden = false;
+  $("s-cur").textContent = s.currency;
+}
+
+function resetSubForm() {
+  $("sub-form").reset();
+  $("sub-form-title").textContent = "Новий платіж";
+  $("s-id").value = "";
+  $("s-active").checked = true;
+  $("s-reset").hidden = true;
+  $("s-cur").textContent = curOf($("s-account").value);
+}
+
+async function saveSub(ev) {
+  ev.preventDefault();
+  const body = {
+    sub_id: $("s-id").value || undefined,
+    name: $("s-name").value.trim(),
+    kind: $("s-kind").value.trim(),
+    period: $("s-period").value,
+    source_account: $("s-account").value,
+    amount: ($("s-amount").value || "0").replace(",", "."),
+    note: $("s-note").value.trim(),
+    active: $("s-active").checked,
+  };
+  const res = await (await fetch("/api/subscription", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  })).json();
+  if (res.error) return toast("Помилка: " + res.error);
+  DATA.subscriptions = res.subscriptions;
+  resetSubForm();
+  renderSubs();
+  toast("Збережено");
+}
+
+async function delSub(id) {
+  const s = DATA.subscriptions.find((x) => x.sub_id === id);
+  if (!confirm(`Видалити «${s ? s.name : id}»? На транзакції це не вплине.`)) return;
+  const res = await (await fetch("/api/subscription/delete", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub_id: id }),
+  })).json();
+  if (res.error) return toast("Помилка: " + res.error);
+  DATA.subscriptions = res.subscriptions;
+  renderSubs();
+  toast("Видалено");
+}
+
+// ── history ────────────────────────────────────────────────────────────────
+
+function renderHistory() {
+  const q = $("h-q").value.trim().toLowerCase();
+  const acct = $("h-account").value;
+  const mode = $("h-mode").value;
+  const limit = parseInt($("h-limit").value, 10);
+
+  const rows = DATA.transactions
+    .filter((t) => (!q || t.description.toLowerCase().includes(q) || (t.subcategory || "").toLowerCase().includes(q))
+                && (!acct || t.source_account === acct)
+                && (!mode || t.mode === mode))
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+  $("h-count").textContent = `${rows.length} операцій · показано ${Math.min(rows.length, limit)}`;
+  $("h-body").innerHTML = rows.slice(0, limit).map((t) => `<tr>
+    <td class="num dim">${t.date}</td>
+    <td>${esc(t.description) || "<span class='dim'>—</span>"}</td>
+    <td><span class="pill ${t.mode}">${esc(t.category_display)}</span></td>
+    <td class="dim">${esc(t.subcategory) || "—"}</td>
+    <td class="num dim">${t.source_account}</td>
+    <td class="r num ${t.signed_amount_minor < 0 ? "neg" : "pos"}">${fmt(t.signed_amount_minor, t.currency)}</td>
+  </tr>`).join("");
+}
+
+// ── queue ──────────────────────────────────────────────────────────────────
+
+function describe(e) {
+  if (e.kind === "transfer") {
+    return `<span class="pill movement">переказ</span> ${e.from_account} → ${e.to_account}${e.description ? " · " + esc(e.description) : ""}`;
+  }
+  return `<span class="pill">${esc(DATA.categories[e.category].display_name)}</span> ${e.account}` +
+    (e.subcategory ? ` · <span class="dim">${esc(e.subcategory)}</span>` : "") +
+    (e.description ? " · " + esc(e.description) : "");
+}
+function amountOf(e) {
+  if (e.kind === "transfer") {
+    return `<span class="neg">−${e.from_amount} ${curOf(e.from_account)}</span> / <span class="pos">+${e.to_amount} ${curOf(e.to_account)}</span>`;
+  }
+  const out = e.direction === "out";
+  return `<span class="${out ? "neg" : "pos"}">${out ? "−" : "+"}${e.amount} ${curOf(e.account)}</span>`;
+}
+
+function renderQueue() {
+  $("q-count").textContent = PENDING.length;
+  $("sync").disabled = PENDING.length === 0;
+  $("q-empty").hidden = PENDING.length > 0;
+  $("q-table").hidden = PENDING.length === 0;
+  $("q-clear").hidden = PENDING.length === 0;
+
+  $("q-body").innerHTML = PENDING.map((e, i) => `<tr class="${e._status || ""}">
+    <td class="num dim">${e.date}</td>
+    <td>${describe(e)}${e._detail ? `<div class="dim" style="font-size:11px">${esc(e._detail)}</div>` : ""}</td>
+    <td class="r num">${amountOf(e)}</td>
+    <td class="r"><button class="btn ghost" data-drop="${i}">✕</button></td>
+  </tr>`).join("");
+
+  for (const b of $("q-body").querySelectorAll("[data-drop]")) {
+    b.onclick = () => { PENDING.splice(+b.dataset.drop, 1); savePending(); renderQueue(); };
+  }
+}
+
+// ── entry form ─────────────────────────────────────────────────────────────
+
+function setKind(kind) {
+  KIND = kind;
+  for (const b of $("kind").children) b.classList.toggle("on", b.dataset.kind === kind);
+  const isTransfer = kind === "transfer";
+  $("w-single").hidden = isTransfer;
+  $("w-transfer").hidden = !isTransfer;
+  $("w-dir").hidden = kind !== "movement";
+
+  if (!isTransfer) {
+    const mode = kind === "expense" ? "consumption" : kind === "income" ? "income" : "movement";
+    $("f-category").innerHTML = Object.entries(DATA.categories)
+      .filter(([, c]) => c.mode === mode)
+      .map(([id, c]) => `<option value="${id}">${esc(c.display_name)}</option>`).join("");
+    $("f-dir").value = kind === "income" ? "in" : "out";
+  }
+  updateHints();
+}
+
+function updateHints() {
+  if (KIND !== "transfer") { $("f-cur").textContent = curOf($("f-account").value); return; }
+  const fc = curOf($("f-from").value), tc = curOf($("f-to").value);
+  $("f-from-cur").textContent = fc;
+  $("f-to-cur").textContent = tc;
+
+  const hint = $("fx-hint");
+  if (fc === tc) {
+    hint.hidden = true;
+    $("f-to-amount").value = $("f-from-amount").value;
+    $("f-to-amount").readOnly = true;
+    return;
+  }
+  $("f-to-amount").readOnly = false;
+  const rates = DATA.fx && DATA.fx.rates;
+  hint.hidden = false;
+  if (rates && rates[fc] && rates[tc]) {
+    const from = parseFloat(String($("f-from-amount").value).replace(",", "."));
+    const rate = rates[tc] / rates[fc];
+    hint.innerHTML = `Курс з кешу: 1 ${fc} ≈ <b class="num">${rate.toFixed(4)}</b> ${tc}` +
+      (Number.isFinite(from) ? ` → приблизно <b class="num">${(from * rate).toFixed(places(tc))} ${tc}</b>. ` : ". ") +
+      `Впиши <b>реально отриману</b> суму — банківський курс завжди інший.`;
+  } else {
+    hint.innerHTML = `Курсу ${fc}/${tc} у кеші немає — впиши реально отриману суму вручну.`;
+  }
+}
+
+function enqueue(ev) {
+  ev.preventDefault();
+  const date = $("f-date").value;
+  const description = $("f-desc").value.trim();
+  let entry;
+
+  if (KIND === "transfer") {
+    const from = $("f-from").value, to = $("f-to").value;
+    if (from === to) return toast("Рахунки мають відрізнятися");
+    const fa = $("f-from-amount").value.replace(",", "."), ta = $("f-to-amount").value.replace(",", ".");
+    if (!(parseFloat(fa) > 0) || !(parseFloat(ta) > 0)) return toast("Обидві суми мають бути > 0");
+    entry = { kind: "transfer", update_id: newUpdateId(), date, from_account: from, from_amount: fa, to_account: to, to_amount: ta, description };
+  } else {
+    const amount = $("f-amount").value.replace(",", ".");
+    if (!(parseFloat(amount) > 0)) return toast("Сума має бути > 0");
+    entry = {
+      kind: "tx", update_id: newUpdateId(), date, account: $("f-account").value, amount,
+      direction: KIND === "income" ? "in" : KIND === "expense" ? "out" : $("f-dir").value,
+      category: $("f-category").value, subcategory: $("f-subcategory").value.trim(), description,
+    };
+  }
+
+  PENDING.push(entry);
+  savePending();
+  renderQueue();
+  for (const id of ["f-amount", "f-from-amount", "f-to-amount", "f-desc"]) $(id).value = "";
+  toast("Додано в чергу");
+}
+
+// ── sync ───────────────────────────────────────────────────────────────────
+
+async function sync() {
+  $("sync").disabled = true;
+  $("sync-status").textContent = "Запис у DynamoDB...";
+
+  // The update_id travels with the row, so re-syncing the same row is a no-op on
+  // the server rather than a duplicate. Only the UI-only fields get stripped.
+  const entries = PENDING.map(({ _status, _detail, ...e }) => e);
+
+  let res;
+  try {
+    res = await (await fetch("/api/sync", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entries }),
+    })).json();
+  } catch (err) {
+    $("sync-status").textContent = "";
+    $("sync").disabled = false;
+    return toast("Немає зв'язку з сервером: " + err.message);
+  }
+  if (res.error) {
+    $("sync-status").textContent = "";
+    $("sync").disabled = false;
+    return toast("Помилка: " + res.error);
+  }
+
+  const byId = Object.fromEntries(res.results.map((r) => [r.update_id, r]));
+  const counts = { written: 0, duplicate: 0, error: 0 };
+  for (const r of res.results) counts[r.status]++;
+  for (const e of PENDING) {
+    const r = byId[e.update_id];
+    if (r) { e._status = r.status; e._detail = r.status === "written" ? "" : r.detail; }
+  }
+  renderQueue();
+  $("sync-status").textContent = `${counts.written} записано · ${counts.duplicate} вже було · ${counts.error} з помилкою`;
+
+  // Failures stay in the queue so they can be fixed and re-synced; the rest go.
+  PENDING = PENDING.filter((e) => e._status === "error");
+  savePending();
+  setTimeout(() => refresh(), counts.error ? 1500 : 700);
+}
+
+function toast(msg) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+// ── boot ───────────────────────────────────────────────────────────────────
+
+async function refresh() {
+  DATA = await (await fetch("/api/data")).json();
+  if (DATA.error) return toast("Помилка: " + DATA.error);
+
+  const opts = Object.entries(DATA.accounts).map(([id, a]) => `<option value="${id}">${esc(a.display_name)}</option>`).join("");
+  for (const id of ["f-account", "f-from", "f-to", "s-account"]) {
+    const keep = $(id).value;
+    $(id).innerHTML = opts;
+    if (keep) $(id).value = keep;
+  }
+  if (!$("f-to").value || $("f-to").value === $("f-from").value) $("f-to").selectedIndex = 1;
+  $("h-account").innerHTML = `<option value="">усі</option>` + opts;
+  $("subcats").innerHTML = (DATA.subcategories || []).map((s) => `<option>${esc(s)}</option>`).join("");
+  $("s-cur").textContent = curOf($("s-account").value);
+
+  renderHeader(); renderYtd(); renderRule(); renderMonthly(); renderGroups();
+  renderCats(); renderRecon(); renderSubs(); renderHistory(); renderQueue();
+  setKind(KIND);
+}
+
+$("f-date").value = new Date().toISOString().slice(0, 10);
+
+for (const b of document.querySelectorAll("nav button")) {
+  b.onclick = () => {
+    for (const x of document.querySelectorAll("nav button")) x.classList.toggle("on", x === b);
+    for (const s of document.querySelectorAll("main section")) s.hidden = s.id !== "tab-" + b.dataset.tab;
+  };
+}
+for (const b of $("kind").children) b.onclick = () => setKind(b.dataset.kind);
+for (const b of $("cat-period").children) {
+  b.onclick = () => {
+    for (const x of $("cat-period").children) x.classList.toggle("on", x === b);
+    CAT_PERIOD = b.dataset.p;
+    renderCats();
+  };
+}
+
+$("entry").onsubmit = enqueue;
+$("sub-form").onsubmit = saveSub;
+$("s-reset").onclick = resetSubForm;
+$("s-account").onchange = () => { $("s-cur").textContent = curOf($("s-account").value); };
+$("sync").onclick = sync;
+$("refresh").onclick = refresh;
+$("q-clear").onclick = () => {
+  if (confirm(`Прибрати всі ${PENDING.length} операцій з черги? У базу вони не потраплять.`)) {
+    PENDING = []; savePending(); renderQueue();
+  }
+};
+$("recon").onclick = () => document.querySelector('nav button[data-tab="overview"]').click();
+
+for (const id of ["f-account", "f-from", "f-to", "f-from-amount"]) $(id).oninput = updateHints;
+for (const id of ["h-q", "h-account", "h-mode", "h-limit"]) $(id).oninput = () => renderHistory();
+
+refresh();
+</script>
+</body>
+</html>

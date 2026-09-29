@@ -5,6 +5,7 @@ ACCOUNTS: dict[str, tuple[str, str]] = {
     "bank_usd_1": ("Bank USD 1", "USD"),
     "bank_eur_1": ("Bank EUR 1", "EUR"),
     "bank_eur_2": ("Bank EUR 2", "EUR"),
+    "bank_eur_3": ("Bank EUR 3", "EUR"),
     "bank_uah_2": ("Bank UAH 2 (debit)", "UAH"),
     "bank_uah_3": ("Bank UAH 3 (credit)", "UAH"),
     "bank_uah_4": ("Bank UAH 4 (savings)", "UAH"),
@@ -15,6 +16,8 @@ ACCOUNTS: dict[str, tuple[str, str]] = {
     "cash_eur": ("Cash EUR", "EUR"),
     "crypto_usdt": ("Crypto USDT", "USDT"),
     "crypto_btc": ("Crypto BTC", "BTC"),
+    "crypto_usdc": ("Crypto USDC", "USDC"),
+    "crypto_eur": ("Crypto EUR", "EUR"),
     "loans_eur": ("Loans (EUR)", "EUR"),
 }
 
@@ -23,6 +26,7 @@ DEFAULT_ACCOUNTS: dict[str, str] = {
     "USD": "bank_usd_1",
     "EUR": "bank_eur_2",
     "USDT": "crypto_usdt",
+    "USDC": "crypto_usdc",
     "BTC": "crypto_btc",
 }
 
@@ -37,6 +41,7 @@ ACCOUNT_GROUPS: dict[str, list[str]] = {
         "bank_uah_5",
         "bank_usd_2",
         "bank_eur_2",
+        "bank_eur_3",
     ],
     "Cash": [
         "cash_uah",
@@ -46,6 +51,8 @@ ACCOUNT_GROUPS: dict[str, list[str]] = {
     "Crypto": [
         "crypto_usdt",
         "crypto_btc",
+        "crypto_usdc",
+        "crypto_eur",
     ],
     "Liabilities": [
         "loans_eur",
